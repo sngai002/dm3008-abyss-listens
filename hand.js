@@ -8,9 +8,11 @@
  * leaves the computer.
  *
  * Adapted from our Jerebu project's hand.js (DM3008, 2026): the
- * mirrored camera, the adaptive "follow" smoothing, the object-fit
- * cover mapping in toCanvas() and the pinch detection are ported
- * from there. In Jerebu a hand held a string; here it holds the line.
+ * mirrored camera, the object-fit cover mapping in toCanvas() and
+ * the pinch detection are ported from there. In Jerebu a hand held
+ * a string; here it holds the line. Jerebu's fixed easing is
+ * replaced by a 1 Euro filter (Casiez, Roussel and Vogel, CHI 2012,
+ * https://gery.casiez.net/1euro/), see the OneEuro object below.
  */
 
 ///////////////////////////////////////////////////////////////////
@@ -33,8 +35,19 @@
 // thumb and index together to jig the lure upwards, open to drop it.
 // When the hand leaves, the lure eases back to the mouse instead of
 // jumping. Reads lastMove from sketch.js to know if the mouse is idle,
-// sea.state to know which hold gesture makes sense, and ui.frame()
-// to keep its text off the panels.
+// sea.state to know which hold gesture makes sense, ui.frame() to
+// keep its text off the panels, and raises fline.response while it
+// steers so the lure itself does not trail the hand.
+//
+// Where the lag comes from and what is done about it:
+//   camera + inference   a small 320 x 240 capture, lite model, one
+//                        hand, detection running continuously
+//   smoothing            the 1 Euro filter: steady when still, almost
+//                        no lag when moving
+//   waiting for results  every frame uses the latest result plus a
+//                        short velocity prediction (about one
+//                        detection interval ahead)
+//   the lure             fline.response goes up while the hand steers
 ///////////////////////////////////////////////////////////////////
 
 function HandInput() {
@@ -45,15 +58,22 @@ function HandInput() {
   this.model = null; // ml5 handPose, loaded once and kept between starts
   this.modelReady = false;
   this.videoReady = false;
-  this.videoW = 640; // real camera size, read once the stream is up
-  this.videoH = 480;
+  this.videoW = 320; // real camera size, read once the stream is up
+  this.videoH = 240;
   this.results = []; // latest hands from ml5, usually 0 or 1
+  this.fresh = false; // a result arrived since the last update()
+  this.resultAt = -1; // ms the latest result arrived
+  this.interval = 33; // eased ms between results, measured
   this.session = 0; // counts starts, so a stale camera callback is ignored
 
-  this.tip = null; // smoothed index fingertip in canvas pixels, null until seen
+  this.tip = null; // filtered index fingertip in canvas pixels, null until seen
+  this.aim = null; // the tip pushed a little ahead along its velocity, the lure target
   this.lastSeen = -1e9; // ms when a hand was last in frame
   this.pinched = false;
   this.pinch = 1; // thumb to index gap over palm size, for debugging
+
+  this.holding = false; // we raised fline.response and owe it back
+  this.restResponse = 0.18; // what fline.response was before we touched it
 
   this.releasing = false; // easing the target back to the mouse after the hand left
   this.releaseStart = 0;
@@ -69,8 +89,14 @@ function HandInput() {
   this.statusIsError = false;
   this.cameraReadyAt = 0; // ms, the model load timeout counts from here
 
-  this.minSmoothing = 0.35; // *** how much to ease when the hand is still (lower = less jitter)
-  this.fastMove = 30; // *** px jump that counts as "fast", no easing at all past this
+  this.captureW = 320; // *** camera size asked for. smaller = faster detection, coarser points
+  this.captureH = 240;
+  this.minCutoff = 1.0; // *** 1 Euro: Hz. lower = steadier when still, laggier when slow
+  this.beta = 0.02; // *** 1 Euro: how fast the cutoff rises with speed. higher = less lag, more jitter
+  this.dCutoff = 2.0; // *** 1 Euro: Hz for the speed estimate. higher = quicker stops, more jitter in the prediction
+  this.lead = 1.0; // *** detection intervals to predict ahead of the last result
+  this.maxLead = 80; // *** ms, how far ahead the prediction may ever reach
+  this.lureResponse = 0.5; // *** fline.response while the hand steers (0.18 at rest)
   this.pinchClose = 0.25; // *** finger gap / palm size that counts as a pinch
   this.pinchOpen = 0.5; // *** has to open past this to count as released
   this.jigLift = 40; // *** px the lure target is pulled up while pinched
@@ -78,10 +104,13 @@ function HandInput() {
   this.releaseTime = 600; // *** ms to ease the target back to the mouse
   this.lowBand = 0.15; // *** bottom part of the screen (fraction) that counts as "held low"
   this.highBand = 0.12; // *** top part of the screen (fraction) that counts as "held high"
-  this.holdTime = 600; // *** ms the fingertip has to stay in a band to fire
+  this.holdTime = 1500; // *** ms the fingertip has to stay in a band to fire
   this.loadTimeout = 20000; // *** ms to wait for the model once the camera is up
   this.errorTime = 5000; // *** ms an error line stays on screen
   this.noteTime = 2000; // *** ms a plain status line stays on screen
+
+  this.fx = new OneEuro(this.minCutoff, this.beta, this.dCutoff);
+  this.fy = new OneEuro(this.minCutoff, this.beta, this.dCutoff);
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -107,6 +136,8 @@ HandInput.prototype.start = function () {
   this.state = "loading";
   this.videoReady = false;
   this.results = [];
+  this.fresh = false;
+  this.resultAt = -1;
   this.session++;
   let session = this.session;
   let self = this;
@@ -114,7 +145,8 @@ HandInput.prototype.start = function () {
   // p5's createCapture only logs when the camera fails, it never
   // calls back, so ask for the camera ourselves first to catch
   // "no camera" and "permission denied", then let p5 open it.
-  let constraints = { video: { width: 640, height: 480, facingMode: "user" }, audio: false };
+  // A small frame is all the model needs and it is quicker to feed it.
+  let constraints = { video: { width: this.captureW, height: this.captureH, facingMode: "user" }, audio: false };
   navigator.mediaDevices
     .getUserMedia(constraints)
     .then(function (stream) {
@@ -125,8 +157,8 @@ HandInput.prototype.start = function () {
       if (self.state !== "loading" || self.session !== session) return;
       self.video = createCapture(constraints, function () {
         if (self.session !== session || self.video === null) return;
-        self.videoW = self.video.elt.videoWidth || 640;
-        self.videoH = self.video.elt.videoHeight || 480;
+        self.videoW = self.video.elt.videoWidth || self.captureW;
+        self.videoH = self.video.elt.videoHeight || self.captureH;
         self.videoReady = true;
         self.cameraReadyAt = millis();
         self.begin();
@@ -160,13 +192,25 @@ HandInput.prototype.toggle = function () {
 };
 
 // Called when the camera or the model is ready, starts once both are.
+// detectStart keeps detecting in the background as fast as the model
+// runs; onResults() just stores each result for the next update().
 HandInput.prototype.begin = function () {
   if (this.state !== "loading" || !this.videoReady || !this.modelReady) return;
   let self = this;
   this.model.detectStart(this.video, function (results) {
-    self.results = results;
+    self.onResults(results);
   });
   this.state = "on";
+};
+
+// A result from ml5. The gap between results is the detection interval,
+// which the prediction and the debug line use.
+HandInput.prototype.onResults = function (results) {
+  let now = millis();
+  if (this.resultAt >= 0) this.interval = lerp(this.interval, constrain(now - this.resultAt, 5, 500), 0.2);
+  this.resultAt = now;
+  this.results = results;
+  this.fresh = true;
 };
 
 // Something went wrong, go back to "off" and say why for a while.
@@ -186,7 +230,11 @@ HandInput.prototype.stop = function () {
   this.session++; // any camera callback still in flight is now stale
   this.videoReady = false;
   this.results = [];
+  this.fresh = false;
+  this.resultAt = -1;
+  this.letGo();
   this.tip = null;
+  this.aim = null;
   this.lastSeen = -1e9;
   this.pinched = false;
   this.releasing = false;
@@ -205,9 +253,11 @@ HandInput.prototype.say = function (message, isError) {
 
 ///////////////////////////////////////////////////////////////////
 // Steering
-// Once a frame. The smoothed fingertip becomes the lure target,
-// lifted while pinched. After the hand leaves, the target eases
-// back towards the mouse so control changes hands without a jump.
+// Once a frame. New results go through the 1 Euro filter; every
+// frame the filtered tip is pushed a little ahead along its speed
+// and becomes the lure target, lifted while pinched. After the hand
+// leaves, the target eases back towards the mouse so control changes
+// hands without a jump.
 ///////////////////////////////////////////////////////////////////
 
 HandInput.prototype.update = function () {
@@ -220,61 +270,108 @@ HandInput.prototype.update = function () {
   }
   if (this.state !== "on") return;
 
-  if (this.results.length > 0) {
-    let h = this.results[0];
-    let index = this.toCanvas(h.index_finger_tip);
-
-    // first sighting snaps, after that the easing keeps it steady
-    if (this.tip === null) this.tip = index;
-    else this.tip = this.follow(this.tip, index);
-
-    // dividing by the palm size means a pinch looks the same
-    // whether your hand is near the camera or far away
-    let palm = dist(h.wrist.x, h.wrist.y, h.index_finger_mcp.x, h.index_finger_mcp.y);
-    let gap = dist(h.thumb_tip.x, h.thumb_tip.y, h.index_finger_tip.x, h.index_finger_tip.y);
-    this.pinch = gap / max(palm, 1);
-
-    // two thresholds so a half-open hand does not flicker between states
-    if (!this.pinched && this.pinch < this.pinchClose) this.pinched = true;
-    else if (this.pinched && this.pinch > this.pinchOpen) this.pinched = false;
-
-    this.lastSeen = millis();
-    this.releasing = false;
+  // only a new result moves the filter. a stale one is not a hand
+  // sighting, so a stalled detector lets the mouse take over
+  if (this.fresh) {
+    this.fresh = false;
+    if (this.results.length > 0) this.read(this.results[0]);
   }
 
-  let since = millis() - this.lastSeen;
+  let now = millis();
+  let since = now - this.lastSeen;
 
   if (since < this.lostTime && this.tip !== null) {
     this.watchBands();
+    this.aim = this.predict(now);
     // on the start screen the line hangs from the boat, same as with the mouse
     if (this.seaState() === "surface") return;
+    this.grab();
     // the hand steers, a pinch pulls the lure up so it jerks through a school
     let lift = this.pinched ? this.jigLift : 0;
-    fline.setTarget(this.tip.x, this.tip.y - lift);
+    fline.setTarget(this.aim.x, this.aim.y - lift);
     return;
   }
 
   // the hand has gone: hand the lure back gently
   if (this.tip !== null) {
+    this.releaseFrom = { x: this.aim.x, y: this.aim.y };
     this.tip = null;
+    this.aim = null;
     this.pinched = false;
     this.band = null;
     this.bandFired = false;
-    this.releasing = true;
-    this.releaseStart = millis();
-    this.releaseFrom = { x: fline.tx, y: fline.ty };
+    this.releasing = this.holding; // nothing to hand back if we never steered
   }
 
   if (this.releasing) {
-    let u = constrain((millis() - this.releaseStart) / this.releaseTime, 0, 1);
+    if (this.releaseStart < 0) this.releaseStart = now;
+    let u = constrain((now - this.releaseStart) / this.releaseTime, 0, 1);
     u = u * u * (3 - 2 * u); // ease in and out
     // when the mouse is idle leave the lure where it is, autopilot drifts from there
-    let mouseIdle = typeof lastMove === "number" && millis() - lastMove > 7000;
+    let mouseIdle = typeof lastMove === "number" && now - lastMove > 7000;
     if (!mouseIdle) {
       fline.setTarget(lerp(this.releaseFrom.x, mouseX, u), lerp(this.releaseFrom.y, mouseY, u));
     }
-    if (u >= 1) this.releasing = false;
+    if (u >= 1) {
+      this.releasing = false;
+      this.letGo();
+    }
   }
+};
+
+// One hand from ml5: filter the fingertip and read the pinch.
+HandInput.prototype.read = function (h) {
+  let index = this.toCanvas(h.index_finger_tip);
+  let t = this.resultAt;
+
+  // first sighting snaps, after that the filter keeps it steady
+  if (this.tip === null) {
+    this.fx.reset(index.x, t);
+    this.fy.reset(index.y, t);
+    this.tip = { x: index.x, y: index.y };
+    this.releaseStart = -1;
+  } else {
+    this.tip = { x: this.fx.filter(index.x, t), y: this.fy.filter(index.y, t) };
+  }
+
+  // dividing by the palm size means a pinch looks the same
+  // whether your hand is near the camera or far away
+  let palm = dist(h.wrist.x, h.wrist.y, h.index_finger_mcp.x, h.index_finger_mcp.y);
+  let gap = dist(h.thumb_tip.x, h.thumb_tip.y, h.index_finger_tip.x, h.index_finger_tip.y);
+  this.pinch = gap / max(palm, 1);
+
+  // two thresholds so a half-open hand does not flicker between states
+  if (!this.pinched && this.pinch < this.pinchClose) this.pinched = true;
+  else if (this.pinched && this.pinch > this.pinchOpen) this.pinched = false;
+
+  this.lastSeen = t;
+  this.releasing = false;
+};
+
+// The last result is already old by the time it arrives (the camera
+// and the model take a while), and it only changes every detection
+// interval. So push the tip ahead along its filtered speed: the time
+// since the result came in, plus about one more interval.
+HandInput.prototype.predict = function (now) {
+  let ahead = min(now - this.resultAt, this.interval) + this.lead * this.interval;
+  ahead = min(ahead, this.maxLead) / 1000;
+  return { x: this.tip.x + this.fx.dx * ahead, y: this.tip.y + this.fy.dx * ahead };
+};
+
+// The lure follows its target with a lerp each frame. Its resting
+// value is a lazy, watery trail; while a hand steers that trail is
+// just lag, so turn it up and give it back afterwards.
+HandInput.prototype.grab = function () {
+  if (this.holding || typeof fline === "undefined") return;
+  this.restResponse = fline.response;
+  fline.response = this.lureResponse;
+  this.holding = true;
+};
+
+HandInput.prototype.letGo = function () {
+  if (!this.holding) return;
+  if (typeof fline !== "undefined") fline.response = this.restResponse;
+  this.holding = false;
 };
 
 // True while the hand is steering or easing back, so sketch.js
@@ -282,17 +379,6 @@ HandInput.prototype.update = function () {
 HandInput.prototype.active = function () {
   if (this.state !== "on") return false;
   return millis() - this.lastSeen < this.lostTime || this.releasing;
-};
-
-// Moves a point towards where the tracking says it is.
-// A fixed amount of easing either jitters (too little) or lags (too much).
-// So ease a lot when the hand is nearly still, where the jitter shows,
-// and barely at all when it moves fast, where the lag shows.
-// A simple version of the "1 Euro filter" (Casiez, Roussel & Vogel, 2012).
-HandInput.prototype.follow = function (current, target) {
-  let moved = dist(current.x, current.y, target.x, target.y);
-  let amount = constrain(map(moved, 0, this.fastMove, this.minSmoothing, 1), this.minSmoothing, 1);
-  return { x: lerp(current.x, target.x, amount), y: lerp(current.y, target.y, amount) };
 };
 
 // ml5 gives points in video pixels. The video is stretched to cover
@@ -360,7 +446,8 @@ HandInput.prototype.gesture = function () {
 // Drawing
 // Screen coordinates, drawn after the world and before the panels:
 // a status line at the bottom, the fingertip as a pale ring with a
-// hint and a hold arc, and a small mirrored camera view bottom right.
+// hint and a hold arc, and a small mirrored camera view bottom right
+// with the measured detection interval under it.
 ///////////////////////////////////////////////////////////////////
 
 HandInput.prototype.render = function () {
@@ -407,12 +494,14 @@ HandInput.prototype.render = function () {
     stroke(143, 220, 255, 60);
     strokeWeight(1);
     rect(width - 20 - w, bottom - h, w, h);
-    if (this.tip === null) {
-      noStroke();
-      fill(212, 230, 234, 140);
-      textAlign(RIGHT, BOTTOM);
-      text("show a hand", width - 20, bottom - 4 - h);
-    }
+
+    // where the lag is on this machine: ms between results from the model
+    noStroke();
+    fill(212, 230, 234, 140);
+    textAlign(RIGHT, BOTTOM);
+    let line1 = "detect " + round(this.interval) + " ms";
+    if (this.tip === null) line1 = "show a hand  -  " + line1; // ASCII only, the page sets no charset
+    text(line1, width - 20, bottom - 4 - h);
   }
 
   if (this.tip !== null) this.renderTip();
@@ -534,4 +623,60 @@ HandInput.prototype.statusLine = function (msg) {
   if (top < height) y = top - 10;
   textAlign(CENTER, BOTTOM);
   text(msg, width / 2, y);
+};
+
+///////////////////////////////////////////////////////////////////
+// OneEuro Object
+// The 1 Euro filter (Casiez, Roussel and Vogel, CHI 2012,
+// https://gery.casiez.net/1euro/). A low-pass filter whose cutoff
+// rises with the speed of the signal: a still hand is smoothed hard
+// so tracking jitter disappears, a moving hand is barely smoothed so
+// it does not lag. One filter per axis. Times are in ms, speeds in
+// px per second.
+//   minCutoff  Hz, the smoothing when still (lower = steadier, laggier)
+//   beta       how quickly the cutoff opens up with speed
+//   dCutoff    Hz, smoothing of the speed estimate itself
+///////////////////////////////////////////////////////////////////
+
+function OneEuro(minCutoff, beta, dCutoff) {
+  this.minCutoff = minCutoff;
+  this.beta = beta;
+  this.dCutoff = dCutoff;
+  this.x = null; // last filtered value
+  this.dx = 0; // last filtered speed, px per second
+  this.t = 0; // ms of the last sample
+}
+
+// Start again from a known value, so the first sample does not ease
+// in from somewhere else.
+OneEuro.prototype.reset = function (x, t) {
+  this.x = x;
+  this.dx = 0;
+  this.t = t;
+};
+
+// How much of a new sample to take for a given cutoff and time step.
+OneEuro.prototype.alpha = function (cutoff, dt) {
+  let tau = 1 / (TWO_PI * cutoff);
+  return 1 / (1 + tau / dt);
+};
+
+// Feed one sample taken at time t (ms), get the filtered value back.
+OneEuro.prototype.filter = function (x, t) {
+  if (this.x === null) {
+    this.reset(x, t);
+    return x;
+  }
+  let dt = (t - this.t) / 1000;
+  if (dt <= 0) return this.x; // same moment twice, nothing new
+
+  // the speed, smoothed a little so one noisy sample does not open the cutoff
+  let dx = (x - this.x) / dt;
+  this.dx = lerp(this.dx, dx, this.alpha(this.dCutoff, dt));
+
+  // the faster it moves, the less it is smoothed
+  let cutoff = this.minCutoff + this.beta * abs(this.dx);
+  this.x = lerp(this.x, x, this.alpha(cutoff, dt));
+  this.t = t;
+  return this.x;
 };
