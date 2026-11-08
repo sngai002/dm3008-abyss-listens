@@ -24,6 +24,7 @@ function FishingLine(x, y) {
   this.anchorX = x; // top of the line, drifts slowly after the lure like a boat
   this.anchorY = -8; // *** just above the top of the screen (surface)
   this.speed = 0; // how fast the lure moved this frame, eased
+  this.response = 0.18; // *** how quickly the lure follows its target (hand.js raises it while tracking)
   this.lit = 0; // 0 to 1, how much the lure is glowing (hits brighten it)
 
   this.pts = [];
@@ -60,8 +61,8 @@ FishingLine.prototype.update = function () {
   this.anchorX = lerp(this.anchorX, this.tx, 0.015);
   let plx = this.lx;
   let ply = this.ly;
-  this.lx = lerp(this.lx, this.tx, 0.18); // *** lure response
-  this.ly = lerp(this.ly, this.ty, 0.18);
+  this.lx = lerp(this.lx, this.tx, this.response);
+  this.ly = lerp(this.ly, this.ty, this.response);
   this.ly = constrain(this.ly, 24, height - 8);
 
   let moved = dist(this.lx, this.ly, plx, ply);

@@ -22,8 +22,9 @@
  *                chain, schools scatter, jellies pulse, the sea pen's
  *                light runs up its stem, the dragon's red beam flares
  *   guide        every creature you strike is added to the field guide.
- *                There are 26 species and at least 22 are within reach
- *                at any hour, the rest come and go with the clock
+ *                The day has four periods (morning, afternoon, evening,
+ *                night) and each has its own 25 species, 100 in all, so
+ *                come back at another time of day to find the rest
  *   back up      hold the lure at the top edge for a second, or press b,
  *                to return to the boat. The guide keeps what you found.
  *                "Start a new log" on the surface clears it for a new player
@@ -34,7 +35,8 @@
  *   v            show / hide the small camera preview
  *   m            mute / unmute (or the button in the clock panel)
  *   g  t  i  y   hide / show the field guide, the clock, the help, the
- *                title. Clicking a panel's heading does the same
+ *                title. Every panel heading also has a collapse button
+ *                and shows its key
  *   k            the demo scrubber: drag the hour to see the sea at any
  *                time of day, then "follow the real time" to let it go
  *   n            force night
@@ -53,7 +55,7 @@
  *   tightly the schools hold together.
  *
  * FILES
- *   species.js   the 26 species, their body plans, colours and hours
+ *   species.js   the 100 species, their body plans, colours and periods
  *   tide.js      real clock (or the scrubber) -> migration (0 noon, 1 midnight)
  *   line.js      the fishing line (Verlet rope) and lure
  *   anatomy.js   how each creature is grown and drawn
