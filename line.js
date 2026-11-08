@@ -34,8 +34,15 @@ function FishingLine(x, y) {
   this.box = { x0: 0, y0: 0, x1: 0, y1: 0 }; // bounding box, for a quick reject in nearest()
 }
 
-// Where the lure should go. Mouse, autopilot and hands all call this.
+// Where the lure should go, in screen coordinates. Mouse, autopilot
+// and hands all call this. The sea's camera may be zoomed or above
+// the water, so the point is mapped into world coordinates here.
 FishingLine.prototype.setTarget = function (x, y) {
+  if (typeof sea !== "undefined" && sea.toWorld) {
+    let w = sea.toWorld(x, y);
+    x = w.x;
+    y = w.y;
+  }
   this.tx = x;
   this.ty = y;
 };

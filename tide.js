@@ -18,12 +18,27 @@ function Tide() {
   this.hour = 0; // 0 to 24, with minutes as a fraction
   this.migration = 1; // eased, 0 (noon) to 1 (midnight)
   this.forceNight = false; // demo switch, see keyPressed in sketch.js
+  this.manual = null; // null = follow the real clock, else the hour the scrubber set
 }
+
+// The demo scrubber (ui.js) sets an hour here. Pass null to follow
+// the real clock again.
+Tide.prototype.setHour = function (h) {
+  this.manual = h === null ? null : constrain(h, 0, 23.999);
+};
+
+Tide.prototype.isLive = function () {
+  return this.manual === null;
+};
 
 // Called once a frame.
 Tide.prototype.update = function () {
-  let d = new Date();
-  this.hour = d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
+  if (this.manual !== null) {
+    this.hour = this.manual;
+  } else {
+    let d = new Date();
+    this.hour = d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
+  }
 
   let target = this.target();
   this.migration = lerp(this.migration, target, 0.01); // *** how slowly the water changes

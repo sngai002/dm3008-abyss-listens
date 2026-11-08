@@ -14,19 +14,30 @@
  * HOW TO INTERACT
  *   The piece opens above the water, at the real hour, with a boat and
  *   the line hanging ready. Click "Lower the line" and the camera sinks
- *   through the surface. This first click also turns the sound on.
+ *   through the surface and the view widens to the whole sea. This
+ *   first click also turns the sound on.
  *
  *   mouse        move it to steer the lure. A slow lure drifts past
  *                things, a fast one disturbs them: plankton flare in a
  *                chain, schools scatter, jellies pulse, the sea pen's
  *                light runs up its stem, the dragon's red beam flares
- *   h            hand tracking (needs a webcam): the lure follows your
- *                index fingertip, pinch to jig the line upward
+ *   guide        every creature you strike is added to the field guide.
+ *                There are 26 species and at least 22 are within reach
+ *                at any hour, the rest come and go with the clock
+ *   back up      hold the lure at the top edge for a second, or press b,
+ *                to return to the boat. The guide keeps what you found.
+ *                "Start a new log" on the surface clears it for a new player
+ *   h            hand tracking on / off (needs a webcam): the lure
+ *                follows your index fingertip, pinch to jig the line.
+ *                Hold your hand low on the screen to lower the line from
+ *                the boat, hold it high to come back up
  *   v            show / hide the small camera preview
  *   m            mute / unmute (or the button in the clock panel)
  *   g  t  i  y   hide / show the field guide, the clock, the help, the
  *                title. Clicking a panel's heading does the same
- *   n            force night, for demos in the daytime
+ *   k            the demo scrubber: drag the hour to see the sea at any
+ *                time of day, then "follow the real time" to let it go
+ *   n            force night
  *   d            debug numbers (fps, migration, counts)
  *   idle         leave it alone for 7 seconds and the line drifts on
  *                its own, so it keeps playing as an installation
@@ -42,7 +53,8 @@
  *   tightly the schools hold together.
  *
  * FILES
- *   tide.js      real clock -> migration (0 noon, 1 midnight)
+ *   species.js   the 26 species, their body plans, colours and hours
+ *   tide.js      real clock (or the scrubber) -> migration (0 noon, 1 midnight)
  *   line.js      the fishing line (Verlet rope) and lure
  *   anatomy.js   how each creature is grown and drawn
  *   creature.js  how creatures move, flock and react
@@ -98,10 +110,13 @@ function draw() {
     else autopilot();
   }
   fline.update();
+  checkGestures();
 
-  // the world, with the camera above or below the surface
+  // the world, seen through the sea's camera (above the water, zoomed,
+  // or settled under it). Older sea.js only has cameraY, so fall back.
   push();
-  translate(0, -sea.cameraY);
+  if (sea.applyCamera) sea.applyCamera();
+  else translate(0, -sea.cameraY);
   sea.renderSky();
   sea.renderWater();
   shoal.run(grid);
@@ -112,6 +127,26 @@ function draw() {
   hand.render();
   ui.render();
   if (showDebug) drawDebug();
+}
+
+// Going down and coming back up without the button.
+// A hand held low on the screen lowers the line, a hand held high
+// brings it back to the boat (hand.js decides what counts as held).
+// With the mouse, keeping the lure at the top edge for a second does
+// the same, as does the "b" key.
+let topEdgeSince = -1; // ms when the lure target first touched the top edge
+
+function checkGestures() {
+  let g = hand.gesture ? hand.gesture() : null;
+  if (g === "dive" && sea.state === "surface") beginDive();
+  if (g === "surface" && sea.state === "under") surfaceAgain();
+
+  if (sea.state === "under" && !hand.active() && mouseY < height * 0.06 && millis() - lastMove < 7000) {
+    if (topEdgeSince < 0) topEdgeSince = millis();
+    else if (millis() - topEdgeSince > 1000) surfaceAgain(); // *** 1000 = ms to hold at the top edge
+  } else {
+    topEdgeSince = -1;
+  }
 }
 
 // When nobody touches it for a while the line wanders on its own,
@@ -131,6 +166,14 @@ function beginDive() {
   }
   sea.begin();
   lastMove = millis();
+}
+
+// Back up to the boat. The guide keeps what you have found, and you
+// can lower the line again. Needs sea.surface() from sea.js.
+function surfaceAgain() {
+  if (sea.state !== "under" || !sea.surface) return;
+  sea.surface();
+  topEdgeSince = -1;
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -153,7 +196,8 @@ function mousePressed() {
 function keyPressed() {
   if (ui.keyPressed(key)) return;
   if (key === "m") sound.toggleMute();
-  if (key === "h") hand.start();
+  if (key === "h") hand.toggle ? hand.toggle() : hand.start();
+  if (key === "b") surfaceAgain();
   if (key === "v") hand.showVideo = !hand.showVideo;
   if (key === "n") tide.forceNight = !tide.forceNight;
   if (key === "d") showDebug = !showDebug;
@@ -185,7 +229,7 @@ function drawDebug() {
   text("fps: " + round(frameRate()), x, y);
   text("migration: " + nf(tide.migration, 1, 2) + (tide.forceNight ? " (forced night)" : ""), x, y + 18);
   text("sea: " + sea.state + "  cam " + round(sea.cameraY), x, y + 36);
-  text("creatures: " + shoal.creatures.length, x, y + 54);
+  text("creatures: " + shoal.creatures.length + "  species in reach: " + speciesActiveCount(tide.hour), x, y + 54);
   text("line speed: " + nf(fline.speed, 1, 2), x, y + 72);
   text("energy: " + nf(sound.energy, 1, 2), x, y + 90);
   pop();
