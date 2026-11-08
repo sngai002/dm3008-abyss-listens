@@ -47,6 +47,14 @@ FishingLine.prototype.setTarget = function (x, y) {
   this.ty = y;
 };
 
+// Jump the lure straight to its target with no speed, so nothing
+// counts it as a strike. Used the moment the camera settles under water.
+FishingLine.prototype.settle = function () {
+  this.lx = this.tx;
+  this.ly = constrain(this.ty, 24, height - 8);
+  this.speed = 0;
+};
+
 FishingLine.prototype.update = function () {
   // the top of the line lags far behind, the lure follows closely
   this.anchorX = lerp(this.anchorX, this.tx, 0.015);

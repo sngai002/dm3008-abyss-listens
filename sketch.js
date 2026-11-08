@@ -75,6 +75,7 @@ let hand;
 let ui;
 
 let showDebug = false;
+let lastSeaState = ""; // sea.state last frame, to catch the moment we arrive under water
 let lastMove = -1e9; // ms when the pointer last moved, for autopilot
 
 function setup() {
@@ -84,13 +85,20 @@ function setup() {
   tide.update();
   tide.migration = tide.target(); // start where the clock says, no fade in
 
-  fline = new FishingLine(width / 2, height * 0.42);
   grid = new Grid(60); // *** keep >= the biggest neighbour distance in creature.js
-  sea = new Sea();
   sound = new SoundEngine();
   hand = new HandInput();
-  ui = new Panels();
+  buildWorld();
+}
 
+// Everything that depends on the canvas size. Called from setup, and
+// again from windowResized if the canvas was 0 by 0 when setup ran
+// (some embeds do that), since then the line, the sea and every
+// creature would have been built at the origin.
+function buildWorld() {
+  fline = new FishingLine(width / 2, height * 0.42);
+  sea = new Sea();
+  ui = new Panels();
   shoal = new Shoal();
   shoal.populate();
 }
@@ -103,12 +111,19 @@ function draw() {
   sound.update();
   sound.setDepth(tide.migration);
 
-  // who is steering the lure: hand, mouse, or the line drifting on its own
+  // who is steering the lure: hand, mouse, or the line drifting on its own.
+  // while the camera is moving (diving or rising) the lure holds still,
+  // otherwise the changing zoom would drag it through the water and
+  // strike everything on the way down
   hand.update();
-  if (!hand.active() && sea.state !== "surface") {
+  if (!hand.active() && sea.state === "under") {
     if (millis() - lastMove < 7000) fline.setTarget(mouseX, mouseY);
     else autopilot();
+    // the first frame under water: put the lure where the pointer is
+    // without a jump, or the jump itself would strike creatures
+    if (lastSeaState !== "under") fline.settle();
   }
+  lastSeaState = sea.state;
   fline.update();
   checkGestures();
 
@@ -151,11 +166,20 @@ function checkGestures() {
 
 // When nobody touches it for a while the line wanders on its own,
 // so it keeps playing as an installation.
+let autoX = -1; // the autopilot's own target, in screen coordinates
+let autoY = -1;
+
 function autopilot() {
   let t = millis() * 0.001;
   let tx = width * (0.5 + 0.8 * (noise(t * 0.07, 11) - 0.5));
   let ty = height * (0.2 + 0.65 * noise(t * 0.07 + 40, 22));
-  fline.setTarget(lerp(fline.tx, tx, 0.03), lerp(fline.ty, ty, 0.03));
+  if (autoX < 0) {
+    autoX = mouseX;
+    autoY = mouseY;
+  }
+  autoX = lerp(autoX, tx, 0.03);
+  autoY = lerp(autoY, ty, 0.03);
+  fline.setTarget(autoX, autoY);
 }
 
 // The start button calls this. Sound has to start from a click.
@@ -182,6 +206,7 @@ function surfaceAgain() {
 
 function mouseMoved() {
   lastMove = millis();
+  autoX = -1; // next autopilot starts from wherever the mouse left the lure
 }
 
 function mouseDragged() {
@@ -204,12 +229,10 @@ function keyPressed() {
 }
 
 function windowResized() {
-  let wasEmpty = width === 0 || height === 0;
+  let wasEmpty = width < 2 || height < 2;
   resizeCanvas(windowWidth, windowHeight);
-  sea.resize();
-  // if the window was 0 by 0 when setup ran (some embeds), everything
-  // spawned at the origin, so fill the sea again now that it has a size
-  if (wasEmpty && width > 0 && height > 0) shoal.populate();
+  if (wasEmpty && width > 1 && height > 1) buildWorld();
+  else sea.resize();
 }
 
 ///////////////////////////////////////////////////////////////////
