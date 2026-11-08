@@ -4,14 +4,15 @@
  *
  * STREAM B owns this file. A Creature is an autonomous agent
  * (week 6 boids) that also drifts on a noise field (week 5),
- * rises and sinks with the tide and its own hours, and reacts to
- * the fishing line. It does not draw itself, it asks its Body
- * (anatomy.js) to. The Shoal manages the whole population and the
- * plankton chain reaction.
+ * rises and sinks with the tide, and reacts to the fishing line.
+ * It does not draw itself, it asks its Body (anatomy.js) to. The
+ * Shoal manages the whole population: which period's species are
+ * alive, the slow swap when the period changes, and the plankton
+ * chain reaction.
  *
  * A creature is one species (species.js) on one body plan. The plan
  * decides how it moves (planBehaviour below), the species decides
- * its depth band, its hours and how many there are.
+ * its depth band, its period of the day and how many there are.
  *
  * Flocking adapted from the Week 6 boids template (Ashley Hi), which
  * is based on Daniel Shiffman's Flocking example for p5.js, by way of
@@ -34,25 +35,29 @@
 //   dayDepth / nightDepth  where the plan sits as fractions of the
 //                          canvas height, [shallowest, deepest]. A
 //                          species' band picks a third of that range.
-//                          Past 1 is below the screen, out of reach.
+//                          Both stay inside the screen, so everything
+//                          in the current period is reachable at any
+//                          hour: the migration only shifts the set up
+//                          at night and down by day. Only a species
+//                          out of its period sinks below the screen.
 ///////////////////////////////////////////////////////////////////
 
 // *** change how each body plan behaves here
 let planBehaviour = [
   // 0 - sparkle: drifts only, no flocking. the line's wake nudges it
-  { maxSpeed: 0.6, maxForce: 0.02, sep: 0, ali: 0, coh: 0, flee: 2.5, sense: 60, cool: 45, dayDepth: [0.5, 1.05], nightDepth: [0.06, 0.9] },
+  { maxSpeed: 0.6, maxForce: 0.02, sep: 0, ali: 0, coh: 0, flee: 2.5, sense: 60, cool: 45, dayDepth: [0.25, 0.95], nightDepth: [0.06, 0.88] },
   // 1 - fish: tight schools that scatter from the line
-  { maxSpeed: 2.1, maxForce: 0.045, sep: 1.7, ali: 1.0, coh: 0.75, flee: 14, sense: 110, cool: 45, dayDepth: [0.5, 0.98], nightDepth: [0.1, 0.8] },
+  { maxSpeed: 2.1, maxForce: 0.045, sep: 1.7, ali: 1.0, coh: 0.75, flee: 14, sense: 110, cool: 45, dayDepth: [0.3, 0.92], nightDepth: [0.1, 0.78] },
   // 2 - jelly: slow, alone, moves in pulses, drifts aside
-  { maxSpeed: 0.8, maxForce: 0.02, sep: 0.5, ali: 0, coh: 0, flee: 3, sense: 80, cool: 60, dayDepth: [0.5, 1.02], nightDepth: [0.12, 0.85] },
+  { maxSpeed: 0.8, maxForce: 0.02, sep: 0.5, ali: 0, coh: 0, flee: 3, sense: 80, cool: 60, dayDepth: [0.3, 0.94], nightDepth: [0.12, 0.84] },
   // 3 - sea pen: anchored, only sways. speed 0 keeps it still
-  { maxSpeed: 0, maxForce: 0, sep: 0, ali: 0, coh: 0, flee: 0, sense: 70, cool: 60, dayDepth: [0.7, 1.0], nightDepth: [0.5, 0.92] },
+  { maxSpeed: 0, maxForce: 0, sep: 0, ali: 0, coh: 0, flee: 0, sense: 70, cool: 60, dayDepth: [0.62, 0.96], nightDepth: [0.5, 0.92] },
   // 4 - dragon: hunts alone with wide slow turns
-  { maxSpeed: 0.9, maxForce: 0.03, sep: 0, ali: 0, coh: 0, flee: 1, sense: 60, cool: 60, dayDepth: [0.6, 1.02], nightDepth: [0.45, 0.88] },
+  { maxSpeed: 0.9, maxForce: 0.03, sep: 0, ali: 0, coh: 0, flee: 1, sense: 60, cool: 60, dayDepth: [0.5, 0.95], nightDepth: [0.4, 0.86] },
   // 5 - squid: jets in bursts, then drifts. bolts from the line
-  { maxSpeed: 2.6, maxForce: 0.03, sep: 0.6, ali: 0, coh: 0, flee: 12, sense: 100, cool: 50, dayDepth: [0.55, 1.03], nightDepth: [0.1, 0.85] },
+  { maxSpeed: 2.6, maxForce: 0.03, sep: 0.6, ali: 0, coh: 0, flee: 12, sense: 100, cool: 50, dayDepth: [0.3, 0.94], nightDepth: [0.1, 0.84] },
   // 6 - eel: a slow travelling sine, keeps its heading, drifts aside
-  { maxSpeed: 0.7, maxForce: 0.02, sep: 0.4, ali: 0, coh: 0, flee: 1.5, sense: 70, cool: 120, dayDepth: [0.55, 1.03], nightDepth: [0.15, 0.9] }
+  { maxSpeed: 0.7, maxForce: 0.02, sep: 0.4, ali: 0, coh: 0, flee: 1.5, sense: 70, cool: 120, dayDepth: [0.3, 0.94], nightDepth: [0.15, 0.88] }
 ];
 
 // How many of a species to spawn, per 100k pixels of canvas, clamped.
@@ -64,7 +69,9 @@ let rarityCount = {
   rare: { perArea: 0.1, min: 1, max: 2 }
 };
 let planktonCount = { perArea: 15, min: 60, max: 210 }; // *** common plan 0 species, about 600 in all
-let goneDepth = 1.3; // *** where a species out of its hours waits, as a fraction of height (below the screen)
+let goneDepth = 1.3; // *** where a species out of its period waits, as a fraction of height (below the screen)
+let swapSeconds = 20; // *** how long a period's set takes to sink away, and the next to rise, at 60 fps
+let spawnPerFrame = 6; // *** how many of the new set are born each frame. Growing a body costs about 1 ms, so 6 keeps the frame
 
 // Shared tuning. Distances are squared once here so the loops never sqrt.
 let neighbourDist = 55; // *** alignment and cohesion range, keep <= the grid cell size (60 in sketch.js)
@@ -92,7 +99,7 @@ let squidJet = 2.2; // *** speed a jet adds, in pixels per frame
 ///////////////////////////////////////////////////////////////////
 // Creature Object
 // One animal. Each plan has its own way of moving (see run), but
-// they all feel the tide and their hours, notice the line, and
+// they all feel the tide and their period, notice the line, and
 // light up when struck. Interface the rest of the sketch relies on:
 //   creature.species, .plan, .position, .velocity, .body, .gen
 //   creature.family            same as .plan, kept for one round
@@ -119,7 +126,8 @@ function Creature(x, y, species) {
   let third = ["shallow", "mid", "deep"].indexOf(this.info.band);
   if (third < 0) third = 1;
   this.pref = (third + random()) / 3;
-  this.present = speciesActive(species, tide.hour) ? 1 : 0; // 1 in its hours, eases to 0 out of them
+  this.present = 0; // 0 waiting below the screen, 1 at its depth. Ramps over swapSeconds
+  this.leaving = false; // true once its period is over: present ramps back to 0, then the shoal removes it
 
   this.flash = 0; // 1 just after a strike, fades to 0
   this.panic = 0; // 1 while the line is shoving it, lets it go faster than it swims
@@ -140,13 +148,18 @@ function Creature(x, y, species) {
 // Below the screen nothing can be touched or seen, so those two
 // steps are skipped there to keep the deep cheap.
 Creature.prototype.run = function (neighbours) {
-  // in or out of its hours. Eased, so a jump of the clock never teleports anyone
-  let active = speciesActive(this.species, tide.hour) ? 1 : 0;
-  this.present = lerp(this.present, active, 0.01); // *** how slowly a species comes and goes
+  // coming or going: present ramps so a change of period, or a jump
+  // of the clock, is a slow rise or sinking, never a teleport
+  let step = 1 / (swapSeconds * 60);
+  if (this.leaving) this.present = max(0, this.present - step);
+  else this.present = min(1, this.present + step);
 
   let reachable = this.position.y < height + 40;
 
-  if (this.plan === 0) this.drift();
+  if (!reachable && this.plan !== 3) {
+    // out of sight, so only the tide matters. Keeps a waiting set cheap
+    this.migrate(2);
+  } else if (this.plan === 0) this.drift();
   else if (this.plan === 1) this.school(neighbours);
   else if (this.plan === 2) this.pulse(neighbours);
   else if (this.plan === 3) this.lean();
@@ -182,10 +195,12 @@ Creature.prototype.flow = function (w) {
 
 // Where this creature belongs right now: its band's depth for this
 // hour of the migration, or the waiting depth below the screen when
-// its species is out of hours, blended by present.
+// its species is out of its period, blended by present (smoothstepped
+// so the ends of the journey are gentle).
 Creature.prototype.wantDepth = function () {
   let home = tide.depthFor(this.pref, this.settings.dayDepth, this.settings.nightDepth);
-  return lerp(height * goneDepth, home, this.present);
+  let u = this.present * this.present * (3 - 2 * this.present);
+  return lerp(height * goneDepth, home, u);
 };
 
 // The diel migration: a pull toward wantDepth. Gain is how many
@@ -511,6 +526,11 @@ Creature.prototype.update = function () {
 
   this.position.x += v.x;
   this.position.y += v.y;
+
+  // a leaving creature must keep up with its sinking target even if it
+  // is slower than the tide, so it also closes the gap directly, the
+  // way a sea pen follows its depth
+  if (this.leaving) this.position.y += max(0, this.wantDepth() - this.position.y) * 0.01;
   this.flash *= 0.94; // *** how fast the light fades
   this.panic *= 0.96;
   if (this.cooldown > 0) this.cooldown--;
@@ -547,9 +567,15 @@ Creature.prototype.render = function () {
 
 ///////////////////////////////////////////////////////////////////
 // Shoal Object
-// All the creatures. Spawns the right number of each species for the
-// canvas size, runs them through the grid, and holds the queue of
-// plankton waiting to light up in a chain reaction.
+// All the creatures. Keeps the species of the current period alive
+// (species.js, periodOf), spawns the right number of each for the
+// canvas size, swaps sets slowly when the period changes, runs
+// everyone through the grid, and holds the queue of plankton waiting
+// to light up in a chain reaction.
+//   shoal.period             name of the period whose set is current
+//   shoal.nextPeriod         a period waiting its turn, or null
+//   shoal.creatures.length   how many are alive (two sets during a swap)
+//   shoal.pending            how many of the new set are still to be born
 ///////////////////////////////////////////////////////////////////
 
 // *** back to front: big slow plans draw behind small quick ones
@@ -557,6 +583,10 @@ let drawOrder = [3, 2, 5, 6, 4, 1, 0];
 
 function Shoal() {
   this.creatures = [];
+  this.period = null; // set by populate()
+  this.nextPeriod = null; // a change waiting until the set now leaving has gone
+  this.births = []; // species still to spawn for the current period, one entry per creature, in draw order
+  this.pending = 0;
   this.queue = []; // plankton about to light: { c, gen, at }
   this.grid = null; // the grid from the last run(), for spark()
 }
@@ -570,29 +600,87 @@ Shoal.prototype.targetCount = function (species) {
   return constrain(n, r.min, r.max);
 };
 
-// Fills the sea at the start. Each creature begins near its depth,
-// or below the screen if its species is out of hours. Plans are
-// pushed in draw order so the list never needs sorting.
+// Fills the sea at the start with the current period's set, every
+// creature already at its depth. Plans go in draw order so the list
+// never needs sorting.
 Shoal.prototype.populate = function () {
   this.creatures = [];
   this.queue = [];
-  for (let k = 0; k < drawOrder.length; k++) {
-    for (let s = 0; s < speciesList.length; s++) {
+  this.births = [];
+  this.pending = 0;
+  this.period = periodOf(tide.hour);
+  this.schedule(this.period);
+  while (this.births.length > 0) {
+    let c = this.spawn(this.births.pop());
+    c.present = 1;
+    c.position.y = c.wantDepth() + random(-60, 60);
+  }
+};
+
+// Lists what is missing from a period's set, in draw order, as one
+// entry per creature to be born. Species already alive (a set that
+// was leaving and has been called back) are not born again.
+Shoal.prototype.schedule = function (period) {
+  this.births = [];
+  let list = speciesOfPeriod(period);
+  // pop() takes from the end, so push the last plan to draw first
+  for (let k = drawOrder.length - 1; k >= 0; k--) {
+    for (let j = 0; j < list.length; j++) {
+      let s = list[j];
       if (speciesList[s].plan !== drawOrder[k]) continue;
-      let n = this.targetCount(s);
-      for (let i = 0; i < n; i++) {
-        let c = new Creature(random(width), 0, s);
-        c.position.y = c.wantDepth() + random(-60, 60);
-        this.creatures.push(c);
-      }
+      let missing = this.targetCount(s) - this.count(s);
+      for (let i = 0; i < missing; i++) this.births.push(s);
     }
   }
+  this.pending = this.births.length;
+};
+
+// Births one creature below the screen, ready to rise.
+Shoal.prototype.spawn = function (species) {
+  let c = new Creature(random(width), height * random(1.1, 1.45), species);
+  this.creatures.push(c);
+  return c;
+};
+
+// The clock has crossed into another period. Everyone not in it
+// starts sinking away, anyone of it who was sinking turns back, and
+// whatever the new set is missing is queued to be born below the
+// screen over the next frames. Anyone already out of sight is dropped
+// at once.
+//
+// Only two sets may be alive: the one leaving and the one arriving.
+// If a set is still leaving and the new period is a third one (the
+// scrubber crossed two boundaries in under a swap), the change waits
+// in nextPeriod until the leaving set has gone.
+Shoal.prototype.changePeriod = function (period) {
+  if (this.periodsAlive(period) > 2) {
+    this.nextPeriod = period;
+    return;
+  }
+  this.nextPeriod = null;
+  this.period = period;
+  for (let i = this.creatures.length - 1; i >= 0; i--) {
+    let c = this.creatures[i];
+    c.leaving = speciesList[c.species].period !== period;
+    if (c.leaving && c.position.y > height + 40) this.creatures.splice(i, 1);
+  }
+  this.schedule(period);
+};
+
+// How many different periods would be alive if this one joined.
+Shoal.prototype.periodsAlive = function (period) {
+  let seen = [period];
+  for (let i = 0; i < this.creatures.length; i++) {
+    let p = speciesList[this.creatures[i].species].period;
+    if (seen.indexOf(p) < 0) seen.push(p);
+  }
+  return seen.length;
 };
 
 Shoal.prototype.count = function (species) {
   let n = 0;
   for (let i = 0; i < this.creatures.length; i++) {
-    if (this.creatures[i].species === species) n++;
+    if (this.creatures[i].species === species && !this.creatures[i].leaving) n++;
   }
   return n;
 };
@@ -606,6 +694,18 @@ Shoal.prototype.countPlan = function (plan) {
 };
 
 Shoal.prototype.run = function (grid) {
+  // the period of the day decides who is alive. A change that had to
+  // wait is tried again every frame until the old set has gone
+  let period = periodOf(tide.hour);
+  if (period !== this.period) this.changePeriod(period);
+  else this.nextPeriod = null;
+
+  // a few births a frame, so the swap never costs one long frame
+  for (let i = 0; i < spawnPerFrame && this.births.length > 0; i++) {
+    this.spawn(this.births.pop());
+  }
+  this.pending = this.births.length;
+
   // rebuild the grid first so every creature sees the same snapshot
   this.grid = grid;
   grid.clear();
@@ -615,8 +715,15 @@ Shoal.prototype.run = function (grid) {
 
   this.chain();
 
+  // in list order, which is draw order. A creature that has sunk out
+  // of sight is removed on the way (and the index stepped back)
   for (let i = 0; i < this.creatures.length; i++) {
     let c = this.creatures[i];
+    if (c.leaving && c.present <= 0 && c.position.y > height + 40) {
+      this.creatures.splice(i, 1);
+      i--;
+      continue;
+    }
     // plankton and sea pens ignore their neighbours, so skip the lookup for them
     let neighbours = c.plan === 0 || c.plan === 3 ? null : grid.query(c.position);
     c.run(neighbours);
