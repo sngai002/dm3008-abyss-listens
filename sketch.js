@@ -5,26 +5,51 @@
  * Most animals in the open ocean make their own light, usually when
  * something disturbs the water around them. Here you lower a line
  * into the dark. Whatever it brushes against answers with light and
- * a note. The real time of day decides who has risen to meet you.
+ * a note. The real time of day decides who has risen to meet you:
+ * every night the deep sea's animals climb toward the surface to feed
+ * and sink back down before dawn (the diel vertical migration), so by
+ * day the water is mostly empty and the sound is muffled, and at
+ * night it is full and bright.
  *
- * HOW TO INTERACT (also shown on screen, press "i" to hide)
- *   start      click "Lower the line" on the surface to sink into the water
- *   mouse      move to steer the lure. moving fast disturbs more
- *   h          hand tracking: hold up a hand, the lure follows your fingertip
- *   m          mute / unmute
- *   g, t, i    hide / show the field guide, the clock, these instructions
- *   n          force night, for demos in the daytime
- *   d          debug numbers
+ * HOW TO INTERACT
+ *   The piece opens above the water, at the real hour, with a boat and
+ *   the line hanging ready. Click "Lower the line" and the camera sinks
+ *   through the surface. This first click also turns the sound on.
+ *
+ *   mouse        move it to steer the lure. A slow lure drifts past
+ *                things, a fast one disturbs them: plankton flare in a
+ *                chain, schools scatter, jellies pulse, the sea pen's
+ *                light runs up its stem, the dragon's red beam flares
+ *   h            hand tracking (needs a webcam): the lure follows your
+ *                index fingertip, pinch to jig the line upward
+ *   v            show / hide the small camera preview
+ *   m            mute / unmute (or the button in the clock panel)
+ *   g  t  i  y   hide / show the field guide, the clock, the help, the
+ *                title. Clicking a panel's heading does the same
+ *   n            force night, for demos in the daytime
+ *   d            debug numbers (fps, migration, counts)
+ *   idle         leave it alone for 7 seconds and the line drifts on
+ *                its own, so it keeps playing as an installation
+ *
+ * HOW IT WORKS (one technique per file, see each header)
+ *   Every creature is grown from one seed: noise shapes the body,
+ *   L-system rules grow jelly tentacles and sea pen fronds, seeded
+ *   recursion branches the dragon's lure, sine waves move fins and
+ *   bells, modulo decides which segments carry a light. Creatures are
+ *   boids on a noise flow field, pulled to a depth that follows the
+ *   clock, fleeing the line. The sound is one Tone.js voice per family
+ *   on a pentatonic scale, and how busy it gets feeds back into how
+ *   tightly the schools hold together.
  *
  * FILES
  *   tide.js      real clock -> migration (0 noon, 1 midnight)
  *   line.js      the fishing line (Verlet rope) and lure
- *   anatomy.js   how each creature is grown and drawn        (stream A)
- *   creature.js  how creatures move, flock and react          (stream B)
- *   sea.js       sky, surface, dive transition, water, fog    (stream C)
- *   ui.js        panels drawn with p5, toggles, start button  (stream D)
- *   sound.js     one Tone.js voice per family                 (stream E)
- *   hand.js      ml5 handPose steering the lure               (stream F)
+ *   anatomy.js   how each creature is grown and drawn
+ *   creature.js  how creatures move, flock and react
+ *   sea.js       sky, surface, dive transition, water, fog
+ *   ui.js        panels drawn with p5, toggles, start button
+ *   sound.js     one Tone.js voice per family
+ *   hand.js      ml5 handPose steering the lure
  *   grid.js      spatial grid for neighbour lookups (from Jerebu)
  */
 
@@ -135,8 +160,12 @@ function keyPressed() {
 }
 
 function windowResized() {
+  let wasEmpty = width === 0 || height === 0;
   resizeCanvas(windowWidth, windowHeight);
   sea.resize();
+  // if the window was 0 by 0 when setup ran (some embeds), everything
+  // spawned at the origin, so fill the sea again now that it has a size
+  if (wasEmpty && width > 0 && height > 0) shoal.populate();
 }
 
 ///////////////////////////////////////////////////////////////////
@@ -147,16 +176,17 @@ function drawDebug() {
   push();
   noStroke();
   fill(3, 8, 18, 220);
-  rect(10, height - 130, 220, 120);
+  rect(width - 240, 170, 220, 120); // under the clock panel, clear of the guide
   fill(255);
   textAlign(LEFT, TOP);
   textSize(13);
-  let y = height - 122;
-  text("fps: " + round(frameRate()), 20, y);
-  text("migration: " + nf(tide.migration, 1, 2) + (tide.forceNight ? " (forced night)" : ""), 20, y + 18);
-  text("sea: " + sea.state + "  cam " + round(sea.cameraY), 20, y + 36);
-  text("creatures: " + shoal.creatures.length, 20, y + 54);
-  text("line speed: " + nf(fline.speed, 1, 2), 20, y + 72);
-  text("energy: " + nf(sound.energy, 1, 2), 20, y + 90);
+  let x = width - 230;
+  let y = 178;
+  text("fps: " + round(frameRate()), x, y);
+  text("migration: " + nf(tide.migration, 1, 2) + (tide.forceNight ? " (forced night)" : ""), x, y + 18);
+  text("sea: " + sea.state + "  cam " + round(sea.cameraY), x, y + 36);
+  text("creatures: " + shoal.creatures.length, x, y + 54);
+  text("line speed: " + nf(fline.speed, 1, 2), x, y + 72);
+  text("energy: " + nf(sound.energy, 1, 2), x, y + 90);
   pop();
 }

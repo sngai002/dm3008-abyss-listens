@@ -289,8 +289,11 @@ HandInput.prototype.render = function () {
   if (this.showVideo && this.videoReady) {
     let w = 160;
     let h = 120;
+    // the help panel lives in this corner too, so the preview sits above it
+    let bottom = height - 20;
+    if (typeof ui !== "undefined" && ui.frame) bottom = ui.frame("help").y - 12;
     push();
-    translate(width - 20, height - 20 - h);
+    translate(width - 20, bottom - h);
     scale(-1, 1);
     tint(143, 220, 255, 110);
     image(this.video, 0, 0, w, h);
@@ -298,12 +301,12 @@ HandInput.prototype.render = function () {
     noFill();
     stroke(143, 220, 255, 60);
     strokeWeight(1);
-    rect(width - 20 - w, height - 20 - h, w, h);
+    rect(width - 20 - w, bottom - h, w, h);
     if (this.tip === null) {
       noStroke();
       fill(212, 230, 234, 140);
       textAlign(RIGHT, BOTTOM);
-      text("show a hand", width - 20, height - 24 - h);
+      text("show a hand", width - 20, bottom - 4 - h);
     }
   }
 
