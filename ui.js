@@ -5,7 +5,8 @@
  * STREAM D owns this file. All of it is drawn with p5 (text, rect,
  * circle), there is no HTML. Panels are hit-tested by rectangle in
  * mousePressed(). Every panel can be collapsed to just its heading
- * and opened again with a click on the heading or a key.
+ * with the round button at the end of the heading, a click anywhere
+ * on the heading, or the key shown in the tag beside the button.
  *
  * Look: translucent dark rounded panels with a 1 px pale border, a
  * serif display face for titles (Georgia), a clean sans for body
@@ -25,22 +26,24 @@
 //   ui.toggle(name)        "guide", "clock", "title", "help"
 //   ui.shown[name]         true = open, false = collapsed to its heading
 //   ui.frame(name)         the rectangle a panel takes up right now
-//                          (hand.js stacks its camera preview on "help")
+//                          (hand.js keeps its preview clear of these)
+//   ui.panelAlpha(name)    0 to 1, how visible a panel is
 //   ui.unlock(species)     creature.js calls this on every strike. The
 //                          species index goes into the field guide
 //   ui.resetUnlocks()      a new player: clear the guide
 //
-// Reads: tide.clockText(), tide.phaseText(), tide.isLive(),
-// speciesList[], sound.muted, sea.state. Calls: beginDive() in
-// sketch.js, sound.toggleMute(), tide.setHour(h) and tide.setHour(null).
-// If Body.prototype.renderIcon(x, y, size) exists (stream A), the guide
-// draws a Body per found species, grown lazily on first use; if
-// Body.prototype.renderSilhouette(x, y, size) exists, locked species
-// get a silhouette the same way. Otherwise a dot.
+// Reads: tide.clockText(), tide.phaseText(), tide.isLive(), tide.hour,
+// speciesList[], dayPeriods, periodStarts, periodOf(), speciesOfPeriod(),
+// sound.muted, sea.state. Calls: beginDive() in sketch.js,
+// sound.toggleMute(), tide.setHour(h) and tide.setHour(null).
+// Portraits come from Body(species, 1).renderIcon(x, y, size) and
+// Body.renderSilhouette(x, y, size) in anatomy.js. Bodies are grown
+// one per frame, only for the guide page that is showing, and kept.
 ///////////////////////////////////////////////////////////////////
 
 function Panels() {
   this.shown = { title: true, clock: true, guide: true, help: true };
+  this.keys = { title: "y", clock: "t", guide: "g", help: "i" }; // *** the panel keys
 
   // *** the palette, shared with the rest of the piece
   this.pale = [212, 230, 234];
@@ -51,6 +54,7 @@ function Panels() {
   // a single family, so a comma list would silently fall back to Times
   this.serif = "Georgia";
   this.sans = "Arial";
+  this.mono = "Courier"; // for the key tags
 
   this.pad = 16; // *** inner margin of every panel
   this.radius = 14; // *** corner radius of panels
@@ -59,7 +63,7 @@ function Panels() {
   // the field guide log. Found flags live for the page's lifetime only,
   // so a shared laptop starts clean on reload (no localStorage on purpose)
   this.found = [];
-  this.flashAt = []; // ms when each species was found, for the row flash
+  this.flashAt = []; // ms when each species was found, for the cell flash
   for (let i = 0; i < speciesList.length; i++) {
     this.found.push(false);
     this.flashAt.push(-1e9);
@@ -67,11 +71,20 @@ function Panels() {
   this.foundCount = 0;
   this.recent = -1; // the species found last
   this.selected = -1; // the cell the player clicked, shown in the detail strip
-  this.hoverCell = -1; // the cell under the pointer this frame
-  this.bodies = {}; // species index -> Body (or null), grown on first use
+  this.hoverCell = -1; // the species under the pointer this frame
+  this.bodies = {}; // species index -> Body, grown on first use
+  this.grewThisFrame = false; // at most one body is grown per frame
   this.toast = null; // { text, at } for about two seconds after a find
   this.toastMs = 2000; // *** how long the "New: ..." toast stays
   this.flashMs = 2000; // *** how long a new cell glows
+
+  // the guide pages, one per period of the day
+  this.pages = [];
+  for (let p = 0; p < dayPeriods.length; p++) {
+    this.pages.push(speciesOfPeriod(dayPeriods[p]));
+  }
+  this.tab = 0; // which page is showing
+  this.tabPinned = false; // true once the player picked a page, else it follows the clock
 
   // the demo scrubber under the clock
   this.scrubOpen = false;
@@ -113,25 +126,27 @@ Panels.prototype.layout = function () {
   b.title = { x: m, y: m, w: min(400, width - 2 * m), h: 100, hh: 52, anchor: "top" };
 
   // clock, top right. the big time is its heading
-  b.clock = { x: width - m - 290, y: m, w: 290, h: 150, hh: 66, anchor: "top" };
-  b.soundBtn = { x: b.clock.x + p, y: b.clock.y + 90, w: 140, h: 30 };
-  b.hourLink = { x: b.clock.x + p, y: b.clock.y + 128, w: 80, h: 16 };
+  b.clock = { x: width - m - 290, y: m, w: 290, h: 162, hh: 66, anchor: "top" };
+  b.soundBtn = { x: b.clock.x + p, y: b.clock.y + 102, w: 140, h: 30 };
+  b.hourLink = { x: b.clock.x + p, y: b.clock.y + 140, w: 80, h: 16 };
 
-  // field guide, bottom left: a grid of small portraits, one cell per
-  // species, and a detail strip under it for one species at a time.
-  // 26 rows would not fit beside the clock on a laptop, a grid does.
+  // field guide, bottom left: four tabs (one per period of the day),
+  // each a grid of 25 portrait cells, and a detail strip for one
+  // species at a time. The strip shrinks to one line on short screens.
   let cell = 48; // *** size of one portrait cell
   let gap = 4;
   let gw = min(400, width - 2 * m);
   let cols = max(4, floor((gw - 2 * p + gap) / (cell + gap)));
-  let rows = ceil(speciesList.length / cols);
+  let per = this.pages[0].length;
+  let rows = ceil(per / cols);
   let gridH = rows * (cell + gap) - gap;
-  let detailH = 88; // *** height of the detail strip
-  let gh = 44 + gridH + 10 + detailH + 8;
-  b.guide = { x: m, y: height - m - gh, w: gw, h: gh, hh: 44, anchor: "bottom", cell: cell, gap: gap, cols: cols, gridH: gridH, detailH: detailH };
+  let tabsH = 36; // *** height of the tab row
+  let detailH = height < 720 ? 36 : 88; // *** the detail strip, one line when space is short
+  let gh = 44 + tabsH + 6 + gridH + 10 + detailH + 8;
+  b.guide = { x: m, y: height - m - gh, w: gw, h: gh, hh: 44, anchor: "bottom", cell: cell, gap: gap, cols: cols, gridH: gridH, tabsH: tabsH, detailH: detailH };
 
-  // help, bottom right
-  b.help = { x: width - m - 300, y: height - m - 136, w: 300, h: 136, hh: 44, anchor: "bottom" };
+  // help, bottom right. short, the keys sit on the panels now
+  b.help = { x: width - m - 300, y: height - m - 96, w: 300, h: 96, hh: 44, anchor: "bottom" };
 
   // start screen. the waterline sits at 80 percent, so everything
   // stays in the top 70 percent of the frame
@@ -155,22 +170,36 @@ Panels.prototype.heading = function (name) {
   return { x: f.x, y: f.y, w: f.w, h: this.boxes[name].hh };
 };
 
-// One portrait cell of the guide grid.
-Panels.prototype.cellBox = function (i) {
+// The round collapse button at the right end of a heading frame.
+Panels.prototype.buttonBox = function (f) {
+  return { x: f.x + f.w - this.pad - 20, y: f.y + 12, w: 20, h: 20 };
+};
+
+// One tab of the guide.
+Panels.prototype.tabBox = function (p) {
   let f = this.frame("guide");
   let b = this.boxes.guide;
-  let col = i % b.cols;
-  let row = floor(i / b.cols);
-  return { x: f.x + this.pad + col * (b.cell + b.gap), y: f.y + 44 + row * (b.cell + b.gap), w: b.cell, h: b.cell };
+  let w = (f.w - 2 * this.pad) / this.pages.length;
+  return { x: f.x + this.pad + p * w, y: f.y + 44, w: w, h: b.tabsH };
+};
+
+// One portrait cell of the showing page, k is the cell number.
+Panels.prototype.cellBox = function (k) {
+  let f = this.frame("guide");
+  let b = this.boxes.guide;
+  let col = k % b.cols;
+  let row = floor(k / b.cols);
+  let top = f.y + 44 + b.tabsH + 6;
+  return { x: f.x + this.pad + col * (b.cell + b.gap), y: top + row * (b.cell + b.gap), w: b.cell, h: b.cell };
 };
 
 // The scrubber strip hangs under the clock, wherever its bottom is.
 Panels.prototype.scrubBoxes = function () {
   let f = this.frame("clock");
-  let strip = { x: f.x, y: f.y + f.h + 8, w: f.w, h: 84 };
-  let follow = { x: strip.x + strip.w - this.pad - 140, y: strip.y + 12, w: 140, h: 26 };
-  let track = { x: strip.x + this.pad + 8, y: strip.y + 52, w: strip.w - 2 * this.pad - 16, h: 24 };
-  return { strip: strip, follow: follow, track: track };
+  let strip = { x: f.x, y: f.y + f.h + 8, w: f.w, h: 112 };
+  let track = { x: strip.x + this.pad + 8, y: strip.y + 40, w: strip.w - 2 * this.pad - 16, h: 24 };
+  let follow = { x: strip.x + this.pad, y: strip.y + 76, w: 150, h: 26 };
+  return { strip: strip, track: track, follow: follow };
 };
 
 Panels.prototype.inBox = function (b) {
@@ -186,6 +215,20 @@ Panels.prototype.toggle = function (name) {
 Panels.prototype.panelAlpha = function (name) {
   if (name === "clock") return 1;
   return 1 - this.startAlpha;
+};
+
+// Which period of the day the clock is in, as an index into dayPeriods.
+Panels.prototype.periodNow = function () {
+  return dayPeriods.indexOf(periodOf(tide.hour));
+};
+
+// "Night . 22:00 to 05:00", with a middle dot. Escaped, since index.html
+// sets no charset and a raw UTF-8 character would show as two
+Panels.prototype.periodLabel = function (p) {
+  let name = dayPeriods[p];
+  let from = periodStarts[p];
+  let to = periodStarts[(p + 1) % periodStarts.length];
+  return name.charAt(0).toUpperCase() + name.slice(1) + " \u00b7 " + nf(from, 2) + ":00 to " + nf(to, 2) + ":00";
 };
 
 ///////////////////////////////////////////////////////////////////
@@ -216,14 +259,26 @@ Panels.prototype.resetUnlocks = function () {
   this.toast = null;
 };
 
-// The Body that draws a species' portrait, grown the first time it is
-// asked for and kept. null when anatomy.js has nothing to draw with.
+// How many of one page's species have been found.
+Panels.prototype.pageCount = function (p) {
+  let list = this.pages[p];
+  let n = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (this.found[list[i]]) n++;
+  }
+  return n;
+};
+
+// The Body that draws a species' portrait. Grown the first time the
+// guide needs it, at most one per frame so a fresh page never stalls,
+// and kept. null until then, or when anatomy.js cannot draw it.
 Panels.prototype.bodyFor = function (i) {
   if (this.bodies[i] !== undefined) return this.bodies[i];
+  if (this.grewThisFrame) return null;
   let can = typeof Body === "function" && typeof Body.prototype.renderIcon === "function";
-  // until anatomy.js reads speciesList it only knows the old families
-  if (typeof familyLook !== "undefined" && i >= familyLook.length) can = false;
-  this.bodies[i] = can ? new Body(i, 1) : null;
+  if (!can) return null;
+  this.grewThisFrame = true;
+  this.bodies[i] = new Body(i, 1);
   return this.bodies[i];
 };
 
@@ -236,6 +291,8 @@ Panels.prototype.render = function () {
   if (width !== this.lastW || height !== this.lastH) this.layout();
   this.updateFade();
   this.updateDrag();
+  if (!this.tabPinned) this.tab = this.periodNow();
+  this.grewThisFrame = false;
 
   push();
   textFont(this.sans);
@@ -255,6 +312,7 @@ Panels.prototype.render = function () {
     if (names[i] === "clock") this.renderClock(a);
     if (names[i] === "guide") this.renderGuide(a);
     if (names[i] === "help") this.renderHelp(a);
+    this.controls(this.frame(names[i]), this.keys[names[i]], this.shown[names[i]], a);
   }
   if (this.scrubOpen) this.renderScrub();
   this.renderToast();
@@ -310,6 +368,42 @@ Panels.prototype.panel = function (f, a) {
   strokeWeight(1);
   fill(this.ink[0], this.ink[1], this.ink[2], 170 * a);
   rect(f.x, f.y, f.w, f.h, this.radius);
+  noStroke();
+};
+
+// The heading controls: a key tag and the round collapse button at
+// the right end of a frame. open decides between minus and plus,
+// drawn as lines so no font or charset can turn them into boxes.
+Panels.prototype.controls = function (f, key, open, a) {
+  let b = this.buttonBox(f);
+  let hover = a > 0.5 && this.inBox(b);
+  if (hover) this.hot = true;
+
+  // the key, in a small monospace tag
+  let tag = { x: b.x - 8 - 22, y: b.y + 1, w: 22, h: 18 };
+  stroke(this.pale[0], this.pale[1], this.pale[2], 50 * a);
+  strokeWeight(1);
+  fill(this.pale[0], this.pale[1], this.pale[2], 10 * a);
+  rect(tag.x, tag.y, tag.w, tag.h, 4);
+  noStroke();
+  textFont(this.mono);
+  textStyle(BOLD);
+  textAlign(CENTER, CENTER);
+  textSize(11);
+  fill(this.pale[0], this.pale[1], this.pale[2], 140 * a);
+  text(key, tag.x + tag.w / 2, tag.y + tag.h / 2);
+  textStyle(NORMAL);
+
+  // the button
+  stroke(this.pale[0], this.pale[1], this.pale[2], (hover ? 170 : 90) * a);
+  fill(this.pale[0], this.pale[1], this.pale[2], (hover ? 40 : 14) * a);
+  circle(b.x + b.w / 2, b.y + b.h / 2, b.w);
+  let cx = b.x + b.w / 2;
+  let cy = b.y + b.h / 2;
+  stroke(this.pale[0], this.pale[1], this.pale[2], (hover ? 240 : 180) * a);
+  strokeWeight(1.5);
+  line(cx - 4, cy, cx + 4, cy);
+  if (!open) line(cx, cy - 4, cx, cy + 4);
   noStroke();
 };
 
@@ -383,7 +477,7 @@ Panels.prototype.pill = function (b, label, glowing, a) {
   text(label, b.x + b.w / 2, b.y + b.h / 2);
 };
 
-// A species portrait. The grown body when there is one, a dot otherwise.
+// A species portrait. The grown body when there is one, a dot until then.
 Panels.prototype.portrait = function (i, x, y, size, a) {
   let c = speciesList[i].col;
   let body = this.bodyFor(i);
@@ -398,15 +492,12 @@ Panels.prototype.portrait = function (i, x, y, size, a) {
   circle(x, y, size * 0.28);
 };
 
-// A locked species: a dark shape, so you can tell something is there.
+// A locked species: its dark shape, so you can tell something is there.
 Panels.prototype.silhouette = function (i, x, y, size, a) {
-  let can = typeof Body === "function" && typeof Body.prototype.renderSilhouette === "function";
-  if (can) {
-    let body = this.bodyFor(i);
-    if (body !== null) {
-      body.renderSilhouette(x, y, size);
-      return;
-    }
+  let body = this.bodyFor(i);
+  if (body !== null && typeof body.renderSilhouette === "function") {
+    body.renderSilhouette(x, y, size);
+    return;
   }
   noStroke();
   fill(this.pale[0], this.pale[1], this.pale[2], 22 * a);
@@ -449,6 +540,7 @@ Panels.prototype.renderClock = function (a) {
   if (!this.shown.clock) return;
 
   this.body(tide.phaseText(), f.x + p, f.y + 64, f.w - 2 * p, 12, true, a);
+  this.body(this.periodLabel(this.periodNow()), f.x + p, f.y + 81, f.w - 2 * p, 12, false, a);
   this.pill(this.boxes.soundBtn, sound.muted ? "Turn sound on" : "Mute sound", false, a);
   this.link(this.boxes.hourLink, "set the hour", a);
 };
@@ -462,10 +554,14 @@ Panels.prototype.renderGuide = function (a) {
   this.body(this.foundCount + " of " + speciesList.length, f.x + p + tw + 12, f.y + 17, 120, 12, true, a);
   if (!this.shown.guide) return;
 
-  // the grid: one cell per species
+  this.renderTabs(a);
+
+  // the grid: one cell per species of the showing page
+  let list = this.pages[this.tab];
   let now = millis();
-  for (let i = 0; i < speciesList.length; i++) {
-    let cb = this.cellBox(i);
+  for (let k = 0; k < list.length; k++) {
+    let i = list[k];
+    let cb = this.cellBox(k);
     let hover = a > 0.5 && this.inBox(cb);
     if (hover) {
       this.hoverCell = i;
@@ -498,13 +594,52 @@ Panels.prototype.renderGuide = function (a) {
   }
 
   // the detail strip: whatever the pointer is over, else the selection
-  let dy = f.y + 44 + b.gridH + 10;
+  let dy = f.y + 44 + b.tabsH + 6 + b.gridH + 10;
   let show = this.hoverCell >= 0 ? this.hoverCell : this.selected;
   stroke(this.pale[0], this.pale[1], this.pale[2], 30 * a);
   strokeWeight(1);
   line(f.x + p, dy - 5, f.x + f.w - p, dy - 5);
   noStroke();
-  this.renderDetail(show, f.x + p, dy, f.w - 2 * p, a);
+  if (b.detailH < 60) this.renderDetailLine(show, f.x + p, dy, f.w - 2 * p, a);
+  else this.renderDetail(show, f.x + p, dy, f.w - 2 * p, a);
+};
+
+// The four pages. The one for the hour on the clock says "now".
+Panels.prototype.renderTabs = function (a) {
+  let now = this.periodNow();
+  for (let p = 0; p < this.pages.length; p++) {
+    let t = this.tabBox(p);
+    let hover = a > 0.5 && this.inBox(t);
+    if (hover) this.hot = true;
+    let on = p === this.tab;
+    let name = dayPeriods[p];
+    name = name.charAt(0).toUpperCase() + name.slice(1);
+
+    noStroke();
+    if (on) {
+      fill(this.glow[0], this.glow[1], this.glow[2], 160 * a);
+      rect(t.x + 4, t.y + t.h - 2, t.w - 8, 2, 1);
+    } else if (hover) {
+      fill(this.pale[0], this.pale[1], this.pale[2], 14 * a);
+      rect(t.x, t.y, t.w, t.h, 6);
+    }
+    textFont(this.sans);
+    textAlign(LEFT, TOP);
+    textSize(12);
+    fill(this.pale[0], this.pale[1], this.pale[2], (on ? 235 : 140) * a);
+    text(name, t.x + 6, t.y + 4);
+    textSize(9);
+    fill(this.pale[0], this.pale[1], this.pale[2], (on ? 170 : 110) * a);
+    let count = this.pageCount(p) + "/" + this.pages[p].length;
+    text(count, t.x + 6, t.y + 20);
+    if (p === now) {
+      // a glowing dot and the word, so the current period reads at a glance
+      let cw = textWidth(count);
+      fill(this.glow[0], this.glow[1], this.glow[2], 220 * a);
+      circle(t.x + 6 + cw + 9, t.y + 24, 4);
+      text("now", t.x + 6 + cw + 15, t.y + 20);
+    }
+  }
 };
 
 // One species written out: portrait, latin name, common name, blurb.
@@ -548,6 +683,41 @@ Panels.prototype.renderDetail = function (i, x, y, w, a) {
   this.body(s.blurb, tx, y + 26, w - 64, 11, true, a);
 };
 
+// The same on one line, for short screens: no blurb.
+Panels.prototype.renderDetailLine = function (i, x, y, w, a) {
+  if (i < 0) {
+    this.body("Brush a creature with the line to add it to the log.", x, y + 6, w, 11, true, a);
+    return;
+  }
+  let s = speciesList[i];
+  let tx = x + 34;
+  if (!this.found[i]) {
+    this.silhouette(i, x + 12, y + 14, 24, a);
+    textFont(this.serif);
+    textStyle(ITALIC);
+    textAlign(LEFT, TOP);
+    textSize(16);
+    fill(this.pale[0], this.pale[1], this.pale[2], 200 * a);
+    text("?", tx, y + 4);
+    textStyle(NORMAL);
+    this.body("Not found yet.", tx + 20, y + 8, w - 60, 11, true, a);
+    return;
+  }
+  this.portrait(i, x + 12, y + 14, 24, a);
+  textFont(this.serif);
+  textStyle(ITALIC);
+  textAlign(LEFT, TOP);
+  textSize(14);
+  fill(this.pale[0], this.pale[1], this.pale[2], 235 * a);
+  text(s.latin, tx, y + 5);
+  let lw = textWidth(s.latin);
+  textStyle(NORMAL);
+  textFont(this.sans);
+  textSize(10);
+  fill(s.col[0], s.col[1], s.col[2], 220 * a);
+  text(s.name.toUpperCase(), tx + lw + 10, y + 9);
+};
+
 Panels.prototype.renderHelp = function (a) {
   let f = this.frame("help");
   let p = this.pad;
@@ -555,9 +725,7 @@ Panels.prototype.renderHelp = function (a) {
   this.title("How to play", f.x + p, f.y + 11, 20, a);
   if (!this.shown.help) return;
   this.body("move the mouse to steer the lure", f.x + p, f.y + 50, f.w - 2 * p, 12, false, a);
-  this.body("h hands   m mute   g guide   t clock", f.x + p, f.y + 70, f.w - 2 * p, 12, true, a);
-  this.body("i help   y title   k set the hour", f.x + p, f.y + 90, f.w - 2 * p, 12, true, a);
-  this.body("b back up   n night", f.x + p, f.y + 110, f.w - 2 * p, 12, true, a);
+  this.body("h hands   m mute   b back up   k set the hour", f.x + p, f.y + 70, f.w - 2 * p, 12, true, a);
 };
 
 ///////////////////////////////////////////////////////////////////
@@ -571,18 +739,18 @@ Panels.prototype.renderScrub = function () {
   let p = this.pad;
   if (this.inBox(s.strip)) this.hovering = true;
   this.panel(s.strip, 1);
+  this.controls(s.strip, "k", true, 1);
 
-  // the hour being shown, and the way back to the clock
+  // the hour being shown
   textFont(this.sans);
   textAlign(LEFT, TOP);
   textSize(11);
   fill(this.pale[0], this.pale[1], this.pale[2], 150);
-  text("set the hour", s.strip.x + p, s.strip.y + 10);
+  text("set the hour", s.strip.x + p, s.strip.y + 8);
   textFont(this.serif);
   textSize(18);
   fill(this.pale[0], this.pale[1], this.pale[2], 235);
-  text(tide.clockText(), s.strip.x + p, s.strip.y + 22);
-  this.pill(s.follow, "follow the real time", false, 1);
+  text(tide.clockText(), s.strip.x + p + 78, s.strip.y + 4);
 
   // the slider: a track with ticks every six hours and a glowing knob
   let t = s.track;
@@ -609,6 +777,9 @@ Panels.prototype.renderScrub = function () {
   circle(kx, ty, 22);
   fill(this.glow[0], this.glow[1], this.glow[2], this.dragging ? 255 : 220);
   circle(kx, ty, 11);
+
+  // the way back to the clock
+  this.pill(s.follow, "follow the real time", false, 1);
 };
 
 // "New: Firefly squid" floats above the guide for a moment.
@@ -712,6 +883,10 @@ Panels.prototype.mousePressed = function () {
   // the scrubber strip, when it is open
   if (this.scrubOpen) {
     let s = this.scrubBoxes();
+    if (this.inBox(this.buttonBox(s.strip))) {
+      this.scrubOpen = false;
+      return true;
+    }
     if (this.inBox(s.follow)) {
       tide.setHour(null);
       this.scrubOpen = false;
@@ -740,13 +915,23 @@ Panels.prototype.mousePressed = function () {
       }
     }
     if (n === "guide" && this.shown.guide) {
-      for (let k = 0; k < speciesList.length; k++) {
+      for (let p = 0; p < this.pages.length; p++) {
+        if (this.inBox(this.tabBox(p))) {
+          // picking the page for the hour on the clock lets it follow the clock again
+          this.tab = p;
+          this.tabPinned = p !== this.periodNow();
+          return true;
+        }
+      }
+      let list = this.pages[this.tab];
+      for (let k = 0; k < list.length; k++) {
         if (this.inBox(this.cellBox(k))) {
-          this.selected = k;
+          this.selected = list[k];
           return true;
         }
       }
     }
+    // the heading, including its round button, toggles the panel
     if (this.inBox(this.heading(n))) {
       this.toggle(n);
       return true;
