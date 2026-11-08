@@ -4,47 +4,67 @@
  *
  * STREAM B owns this file. A Creature is an autonomous agent
  * (week 6 boids) that also drifts on a noise field (week 5),
- * rises and sinks with the tide, and reacts to the fishing line.
- * It does not draw itself, it asks its Body (anatomy.js) to.
- * The Shoal manages the whole population and the plankton chain
- * reaction.
+ * rises and sinks with the tide and its own hours, and reacts to
+ * the fishing line. It does not draw itself, it asks its Body
+ * (anatomy.js) to. The Shoal manages the whole population and the
+ * plankton chain reaction.
+ *
+ * A creature is one species (species.js) on one body plan. The plan
+ * decides how it moves (planBehaviour below), the species decides
+ * its depth band, its hours and how many there are.
  *
  * Flocking adapted from the Week 6 boids template (Ashley Hi), which
  * is based on Daniel Shiffman's Flocking example for p5.js, by way of
  * our earlier project Jerebu (boid.js and flock.js): neighbours from
- * a spatial grid, alignment and cohesion within one family only, a
+ * a spatial grid, alignment and cohesion within one species only, a
  * noise flow field and the energy feedback loop. Rewritten here with
- * plain x and y numbers instead of p5.Vector objects, so 700
+ * plain x and y numbers instead of p5.Vector objects, so 800
  * creatures can move without allocating anything each frame.
  */
 
 ///////////////////////////////////////////////////////////////////
-// Family behaviour
-// Same index as familyLook in anatomy.js. Add to the end, never reorder.
+// Plan behaviour
+// Same index as bodyPlans in species.js. Add to the end, never reorder.
 //   maxSpeed, maxForce     how fast it swims and how hard it can turn
 //   sep, ali, coh          week 6 weights. 0 means the rule is off
 //   flee                   how hard a moving line pushes it, as a
 //                          multiple of maxForce
 //   sense                  how far away it notices the line, in pixels
-//   dayDepth / nightDepth  where the family sits as fractions of the
-//                          canvas height, [shallowest, deepest].
+//   cool                   frames before it can light up again
+//   dayDepth / nightDepth  where the plan sits as fractions of the
+//                          canvas height, [shallowest, deepest]. A
+//                          species' band picks a third of that range.
 //                          Past 1 is below the screen, out of reach.
-//   perArea                how many to spawn per 100k pixels of canvas
 ///////////////////////////////////////////////////////////////////
 
-// *** change how each family behaves here
-let familyBehaviour = [
-  // 0 - sea sparkle: drifts only, no flocking. the line's wake nudges it
-  { maxSpeed: 0.6, maxForce: 0.02, sep: 0, ali: 0, coh: 0, flee: 2.5, sense: 60, dayDepth: [0.62, 1.22], nightDepth: [0.06, 0.92], perArea: 25, min: 150, max: 600 },
-  // 1 - lanternfish: tight schools that scatter from the line
-  { maxSpeed: 2.1, maxForce: 0.045, sep: 1.7, ali: 1.0, coh: 0.75, flee: 14, sense: 110, dayDepth: [0.78, 1.28], nightDepth: [0.12, 0.82], perArea: 6, min: 30, max: 90 },
-  // 2 - alarm jelly: slow, alone, moves in pulses, drifts aside
-  { maxSpeed: 0.8, maxForce: 0.02, sep: 0.5, ali: 0, coh: 0, flee: 3, sense: 80, dayDepth: [0.72, 1.22], nightDepth: [0.15, 0.85], perArea: 0.4, min: 3, max: 6 },
+// *** change how each body plan behaves here
+let planBehaviour = [
+  // 0 - sparkle: drifts only, no flocking. the line's wake nudges it
+  { maxSpeed: 0.6, maxForce: 0.02, sep: 0, ali: 0, coh: 0, flee: 2.5, sense: 60, cool: 45, dayDepth: [0.5, 1.05], nightDepth: [0.06, 0.9] },
+  // 1 - fish: tight schools that scatter from the line
+  { maxSpeed: 2.1, maxForce: 0.045, sep: 1.7, ali: 1.0, coh: 0.75, flee: 14, sense: 110, cool: 45, dayDepth: [0.5, 0.98], nightDepth: [0.1, 0.8] },
+  // 2 - jelly: slow, alone, moves in pulses, drifts aside
+  { maxSpeed: 0.8, maxForce: 0.02, sep: 0.5, ali: 0, coh: 0, flee: 3, sense: 80, cool: 60, dayDepth: [0.5, 1.02], nightDepth: [0.12, 0.85] },
   // 3 - sea pen: anchored, only sways. speed 0 keeps it still
-  { maxSpeed: 0, maxForce: 0, sep: 0, ali: 0, coh: 0, flee: 0, sense: 70, dayDepth: [0.9, 1.3], nightDepth: [0.55, 0.95], perArea: 0.3, min: 2, max: 5 },
-  // 4 - stoplight dragon: one, hunts alone, below the screen by day
-  { maxSpeed: 0.9, maxForce: 0.03, sep: 0, ali: 0, coh: 0, flee: 1, sense: 60, dayDepth: [1.35, 1.35], nightDepth: [0.7, 0.7], perArea: 0, min: 1, max: 1 }
+  { maxSpeed: 0, maxForce: 0, sep: 0, ali: 0, coh: 0, flee: 0, sense: 70, cool: 60, dayDepth: [0.7, 1.0], nightDepth: [0.5, 0.92] },
+  // 4 - dragon: hunts alone with wide slow turns
+  { maxSpeed: 0.9, maxForce: 0.03, sep: 0, ali: 0, coh: 0, flee: 1, sense: 60, cool: 60, dayDepth: [0.6, 1.02], nightDepth: [0.45, 0.88] },
+  // 5 - squid: jets in bursts, then drifts. bolts from the line
+  { maxSpeed: 2.6, maxForce: 0.03, sep: 0.6, ali: 0, coh: 0, flee: 12, sense: 100, cool: 50, dayDepth: [0.55, 1.03], nightDepth: [0.1, 0.85] },
+  // 6 - eel: a slow travelling sine, keeps its heading, drifts aside
+  { maxSpeed: 0.7, maxForce: 0.02, sep: 0.4, ali: 0, coh: 0, flee: 1.5, sense: 70, cool: 120, dayDepth: [0.55, 1.03], nightDepth: [0.15, 0.9] }
 ];
+
+// How many of a species to spawn, per 100k pixels of canvas, clamped.
+// Bigger species are fewer (the count is divided by size).
+// *** change the population here
+let rarityCount = {
+  common: { perArea: 1.8, min: 15, max: 30 }, // schools
+  uncommon: { perArea: 0.3, min: 3, max: 5 },
+  rare: { perArea: 0.1, min: 1, max: 2 }
+};
+let planktonCount = { perArea: 15, min: 60, max: 210 }; // *** common plan 0 species, about 600 in all
+let goneDepth = 1.3; // *** where a species out of its hours waits, as a fraction of height (below the screen)
 
 // Shared tuning. Distances are squared once here so the loops never sqrt.
 let neighbourDist = 55; // *** alignment and cohesion range, keep <= the grid cell size (60 in sketch.js)
@@ -63,58 +83,76 @@ let chainDist = 42; // *** how far a spark can jump, keep <= grid cell size
 let chainDistSq = chainDist * chainDist;
 let chainMax = 36; // *** lights waiting at once. keeps a sweep through a thick cloud from playing hundreds of notes
 
-// Jelly pulse.
+// Jelly pulse and squid jet.
 let jellyBeat = 0.04; // *** phase per frame, about one squeeze every 2.5 s
 let jellyThrust = 0.06; // *** push on each squeeze
+let squidJetEvery = 130; // *** frames between jets, give or take a third
+let squidJet = 2.2; // *** speed a jet adds, in pixels per frame
 
 ///////////////////////////////////////////////////////////////////
 // Creature Object
-// One animal. Each family has its own way of moving (see run), but
-// they all feel the tide, notice the line, and light up when struck.
-// Interface the rest of the sketch relies on:
-//   creature.family, .position, .velocity, .body, .gen
+// One animal. Each plan has its own way of moving (see run), but
+// they all feel the tide and their hours, notice the line, and
+// light up when struck. Interface the rest of the sketch relies on:
+//   creature.species, .plan, .position, .velocity, .body, .gen
+//   creature.family            same as .plan, kept for one round
 //   creature.run(neighbours)   move, react, render
-//   creature.strike()          the line hit it (flash, sound, lure flare)
+//   creature.strike()          the line hit it (flash, sound, guide)
 ///////////////////////////////////////////////////////////////////
 
-function Creature(x, y, family) {
-  this.family = family;
-  this.settings = familyBehaviour[family];
-  this.body = new Body(family, random(100000));
+function Creature(x, y, species) {
+  this.species = species;
+  this.info = speciesList[species];
+  this.plan = this.info.plan;
+  this.family = this.plan; // older files still read family
+  this.settings = planBehaviour[this.plan];
+  this.body = new Body(species, random(100000));
 
   this.position = createVector(x, y);
-  this.velocity = p5.Vector.random2D().mult(this.settings.maxSpeed);
+  this.maxSpeed = this.settings.maxSpeed / sqrt(this.info.size); // big things are slower
+  this.maxForce = this.settings.maxForce;
+  this.velocity = p5.Vector.random2D().mult(this.maxSpeed);
   this.ax = 0; // acceleration as two numbers, so no vectors are made per frame
   this.ay = 0;
-  this.maxSpeed = this.settings.maxSpeed;
-  this.maxForce = this.settings.maxForce;
 
-  this.pref = random(); // preferred band within the family's depth range
+  // the band takes a third of the plan's depth range, pref varies inside it
+  let third = ["shallow", "mid", "deep"].indexOf(this.info.band);
+  if (third < 0) third = 1;
+  this.pref = (third + random()) / 3;
+  this.present = speciesActive(species, tide.hour) ? 1 : 0; // 1 in its hours, eases to 0 out of them
+
   this.flash = 0; // 1 just after a strike, fades to 0
   this.panic = 0; // 1 while the line is shoving it, lets it go faster than it swims
   this.cooldown = 0; // frames until it can light up again
   this.gen = 0; // chain reaction generation of the last flash, sound.js reads it
   this.seed = random(1000); // for its own noise wander
 
-  // family quirks
-  this.angle = this.velocity.heading(); // where a jelly's bell or the dragon's head points
-  this.phase = random(TWO_PI); // where a jelly is in its pulse
+  // plan quirks
+  this.angle = this.velocity.heading(); // where a jelly, squid, eel or dragon points
+  this.phase = random(TWO_PI); // a jelly's pulse, an eel's wiggle
+  this.jetIn = random(squidJetEvery); // frames until a squid's next jet
   this.anchorX = x; // a sea pen never leaves this column
   this.sway = 0; // a sea pen's lean in radians, 0 is upright
   this.swayVel = 0;
 }
 
-// Each family moves its own way, then everyone feels the line.
+// Each plan moves its own way, then everyone feels the line.
 // Below the screen nothing can be touched or seen, so those two
 // steps are skipped there to keep the deep cheap.
 Creature.prototype.run = function (neighbours) {
+  // in or out of its hours. Eased, so a jump of the clock never teleports anyone
+  let active = speciesActive(this.species, tide.hour) ? 1 : 0;
+  this.present = lerp(this.present, active, 0.01); // *** how slowly a species comes and goes
+
   let reachable = this.position.y < height + 40;
 
-  if (this.family === 0) this.drift();
-  else if (this.family === 1) this.school(neighbours);
-  else if (this.family === 2) this.pulse(neighbours);
-  else if (this.family === 3) this.lean();
-  else this.hunt(neighbours);
+  if (this.plan === 0) this.drift();
+  else if (this.plan === 1) this.school(neighbours);
+  else if (this.plan === 2) this.pulse(neighbours);
+  else if (this.plan === 3) this.lean();
+  else if (this.plan === 4) this.hunt(neighbours);
+  else if (this.plan === 5) this.jet(neighbours);
+  else this.undulate(neighbours);
 
   if (reachable) this.sense();
   this.update();
@@ -142,29 +180,41 @@ Creature.prototype.flow = function (w) {
   this.steer(cos(a) * this.maxSpeed - this.velocity.x, sin(a) * this.maxSpeed - this.velocity.y, this.maxForce * w);
 };
 
-// The diel migration: a pull toward where the tide says this one
-// belongs right now. Gain is how many times maxForce the pull may
-// reach: above 1 it beats the flow field, so an up-current cannot
-// hold a creature near the surface all day.
+// Where this creature belongs right now: its band's depth for this
+// hour of the migration, or the waiting depth below the screen when
+// its species is out of hours, blended by present.
+Creature.prototype.wantDepth = function () {
+  let home = tide.depthFor(this.pref, this.settings.dayDepth, this.settings.nightDepth);
+  return lerp(height * goneDepth, home, this.present);
+};
+
+// The diel migration: a pull toward wantDepth. Gain is how many
+// times maxForce the pull may reach: above 1 it beats the flow
+// field, so an up-current cannot hold a creature near the surface.
 Creature.prototype.migrate = function (gain) {
-  let want = tide.depthFor(this.pref, this.settings.dayDepth, this.settings.nightDepth);
-  let pull = (want - this.position.y) * 0.0004; // *** how firmly depth is held
+  let pull = (this.wantDepth() - this.position.y) * 0.0004; // *** how firmly depth is held
   let limit = this.maxForce * gain;
   this.ay += constrain(pull, -limit, limit);
 };
 
+// Turns angle toward a direction by a fraction, the short way round.
+Creature.prototype.turnToward = function (to, amount) {
+  let diff = atan2(sin(to - this.angle), cos(to - this.angle));
+  this.angle += diff * amount;
+};
+
 ///////////////////////////////////////////////////////////////////
 // Ways of moving
-// One method per family. run() picks the right one.
+// One method per body plan. run() picks the right one.
 ///////////////////////////////////////////////////////////////////
 
-// Sea sparkle: carried by the current, no will of its own.
+// Sparkle: carried by the current, no will of its own.
 Creature.prototype.drift = function () {
   this.flow(1);
   this.migrate(2);
 };
 
-// Lanternfish: the week 6 rules, plus the current and the tide.
+// Fish: the week 6 rules, plus the current and the tide.
 Creature.prototype.school = function (neighbours) {
   // Feedback loop from Jerebu: the busier the music gets, the less
   // the fish care about each other, so the school breaks up and the
@@ -178,7 +228,7 @@ Creature.prototype.school = function (neighbours) {
   this.migrate(2);
 };
 
-// Alarm jelly: a thrust on each squeeze of the bell, then it coasts.
+// Jelly: a thrust on each squeeze of the bell, then it coasts.
 Creature.prototype.pulse = function (neighbours) {
   // the bell turns slowly on its own noise
   this.angle += (noise(this.seed, frameCount * 0.003) - 0.5) * 0.03; // *** how much a jelly wanders
@@ -200,9 +250,8 @@ Creature.prototype.pulse = function (neighbours) {
 // Sea pen: anchored, so it only rises and sinks with the tide and
 // leans in the current. The lean is a spring the line can knock.
 Creature.prototype.lean = function () {
-  let want = tide.depthFor(this.pref, this.settings.dayDepth, this.settings.nightDepth);
   this.position.x = this.anchorX;
-  this.position.y += (want - this.position.y) * 0.01;
+  this.position.y += (this.wantDepth() - this.position.y) * 0.01;
 
   let current = sin(frameCount * 0.01 + this.seed) * 0.15; // *** how far the current bends it
   this.swayVel += (current - this.sway) * 0.004; // *** stiffness of the stem
@@ -210,9 +259,8 @@ Creature.prototype.lean = function () {
   this.sway += this.swayVel;
 };
 
-// Stoplight dragon: slow, wide turns on its own noise, and it leans
-// toward any lanternfish it can see. By day its depth is below the
-// screen, so it only comes within reach at night.
+// Dragon: slow, wide turns on its own noise, and it leans toward
+// any fish it can see.
 Creature.prototype.hunt = function (neighbours) {
   this.angle += (noise(this.seed, frameCount * 0.004) - 0.5) * 0.06; // *** how wide the turns are
 
@@ -221,7 +269,7 @@ Creature.prototype.hunt = function (neighbours) {
   let ty = 0;
   for (let i = 0; i < neighbours.length; i++) {
     let other = neighbours[i];
-    if (other.family !== 1) continue;
+    if (other.plan !== 1) continue;
     let dx = other.position.x - this.position.x;
     let dy = other.position.y - this.position.y;
     let d2 = dx * dx + dy * dy;
@@ -231,22 +279,52 @@ Creature.prototype.hunt = function (neighbours) {
       ty = dy;
     }
   }
-  if (tx !== 0 || ty !== 0) {
-    let to = atan2(ty, tx);
-    let diff = atan2(sin(to - this.angle), cos(to - this.angle)); // shortest way round
-    this.angle += diff * 0.03; // *** how keenly it turns toward prey
-  }
+  if (tx !== 0 || ty !== 0) this.turnToward(atan2(ty, tx), 0.03); // *** how keenly it turns toward prey
 
   this.steer(cos(this.angle) * this.maxSpeed - this.velocity.x, sin(this.angle) * this.maxSpeed - this.velocity.y, this.maxForce);
   this.migrate(3);
+};
+
+// Squid: a jet every couple of seconds in the direction it faces,
+// then it drifts, slows, and turns a little on noise before the next.
+Creature.prototype.jet = function (neighbours) {
+  this.angle += (noise(this.seed, frameCount * 0.005) - 0.5) * 0.05; // *** how much it turns between jets
+
+  this.jetIn--;
+  if (this.jetIn <= 0) {
+    this.velocity.x += cos(this.angle) * squidJet;
+    this.velocity.y += sin(this.angle) * squidJet;
+    this.jetIn = squidJetEvery * random(0.66, 1.33);
+  }
+  this.velocity.mult(0.975); // *** drag between jets
+
+  this.separate(neighbours, this.settings.sep);
+  this.migrate(2);
+};
+
+// Eel: keeps a heading that only turns slowly, and swims along it in
+// a travelling sine (week 4), swaying side to side as it goes.
+Creature.prototype.undulate = function (neighbours) {
+  this.angle += (noise(this.seed, frameCount * 0.002) - 0.5) * 0.02; // *** how slowly it changes course
+  this.phase += 0.05; // *** how fast it wiggles
+
+  // forward along the heading, plus a sideways sway at right angles to it
+  let sway = sin(this.phase) * 0.6; // *** how wide the wiggle is, as a fraction of speed
+  let dx = cos(this.angle) - sin(this.angle) * sway;
+  let dy = sin(this.angle) + cos(this.angle) * sway;
+  this.steer(dx * this.maxSpeed - this.velocity.x, dy * this.maxSpeed - this.velocity.y, this.maxForce * 3); // 3 so the sway is not flattened by the cap
+
+  this.separate(neighbours, this.settings.sep);
+  this.migrate(2);
 };
 
 ///////////////////////////////////////////////////////////////////
 // Rules of Flocking
 // Same rules as the Week 6 template, but looping over neighbours
 // from the grid and written with plain numbers. Alignment and
-// cohesion only count the same family. Separation counts everyone
-// except plankton, which are too small to swim around.
+// cohesion only count the same species, so each kind of fish keeps
+// its own school. Separation counts everyone except plankton, which
+// are too small to swim around.
 ///////////////////////////////////////////////////////////////////
 
 // Separation
@@ -259,7 +337,7 @@ Creature.prototype.separate = function (neighbours, w) {
 
   for (let i = 0; i < neighbours.length; i++) {
     let other = neighbours[i];
-    if (other === this || other.family === 0) continue;
+    if (other === this || other.plan === 0) continue;
 
     // personal space grows with both bodies, but stays inside the grid's reach
     let space = min(this.body.radius + other.body.radius + 10, 58);
@@ -287,7 +365,7 @@ Creature.prototype.separate = function (neighbours, w) {
 };
 
 // Alignment
-// Matches the average velocity of nearby creatures of the same family.
+// Matches the average velocity of nearby creatures of the same species.
 Creature.prototype.align = function (neighbours, w) {
   if (w === 0) return;
   let sx = 0;
@@ -296,7 +374,7 @@ Creature.prototype.align = function (neighbours, w) {
 
   for (let i = 0; i < neighbours.length; i++) {
     let other = neighbours[i];
-    if (other === this || other.family !== this.family) continue;
+    if (other === this || other.species !== this.species) continue;
     let dx = other.position.x - this.position.x;
     let dy = other.position.y - this.position.y;
     if (dx * dx + dy * dy < neighbourDistSq) {
@@ -317,7 +395,7 @@ Creature.prototype.align = function (neighbours, w) {
 };
 
 // Cohesion
-// Seeks the average position of nearby creatures of the same family.
+// Seeks the average position of nearby creatures of the same species.
 Creature.prototype.cohesion = function (neighbours, w) {
   if (w === 0) return;
   let sx = 0;
@@ -326,7 +404,7 @@ Creature.prototype.cohesion = function (neighbours, w) {
 
   for (let i = 0; i < neighbours.length; i++) {
     let other = neighbours[i];
-    if (other === this || other.family !== this.family) continue;
+    if (other === this || other.species !== this.species) continue;
     let dx = other.position.x - this.position.x;
     let dy = other.position.y - this.position.y;
     if (dx * dx + dy * dy < neighbourDistSq) {
@@ -353,8 +431,8 @@ Creature.prototype.cohesion = function (neighbours, w) {
 // The line
 // A still line is just another thing in the water. A moving one
 // pushes water ahead of it, so creatures feel it coming and move
-// away: schools bolt, jellies drift aside, plankton swirl in the
-// wake. Touching a body while moving is a strike.
+// away: schools and squid bolt, jellies and eels drift aside,
+// plankton swirl in the wake. Touching a body while moving is a strike.
 ///////////////////////////////////////////////////////////////////
 
 Creature.prototype.sense = function () {
@@ -374,9 +452,14 @@ Creature.prototype.sense = function () {
       let push = moving * near * this.maxForce * s.flee;
       this.ax += (dx / d) * push;
       this.ay += (dy / d) * push;
-      this.panic = max(this.panic, moving * near);
+      // eels drift aside without hurrying, everyone else may bolt
+      if (this.plan !== 6) this.panic = max(this.panic, moving * near);
     }
-    if (this.family === 3) {
+    if (this.plan === 5) {
+      // a startled squid lights its whole mantle, no note until it is touched
+      this.flash = max(this.flash, moving * near * 0.6); // *** how brightly a squid startles
+    }
+    if (this.plan === 3) {
       // the wake knocks the frond sideways, away from the line
       this.swayVel += (dx > 0 ? 1 : -1) * moving * near * 0.004; // *** how hard the line rocks a sea pen
     }
@@ -387,10 +470,12 @@ Creature.prototype.sense = function () {
   }
 };
 
-// The line struck this creature.
+// The line struck this creature. The lure flares and the field
+// guide learns the species.
 Creature.prototype.strike = function () {
   fline.strike();
   this.ignite(1, 0);
+  if (typeof ui !== "undefined" && ui.unlock) ui.unlock(this.species);
 };
 
 // Lights up and sounds. Chain reaction flashes come through here
@@ -399,9 +484,9 @@ Creature.prototype.strike = function () {
 Creature.prototype.ignite = function (strength, gen) {
   this.flash = strength;
   this.gen = gen; // set before play() so the sound can climb with it
-  this.cooldown = 45; // *** frames before it can light again
+  this.cooldown = this.settings.cool;
   sound.play(this);
-  if (this.family === 0 && gen < chainFanout.length) shoal.spark(this, gen);
+  if (this.plan === 0 && gen < chainFanout.length) shoal.spark(this, gen);
 };
 
 ///////////////////////////////////////////////////////////////////
@@ -441,13 +526,14 @@ Creature.prototype.borders = function () {
   if (this.position.y > height * 1.5) this.position.y = height * 1.5;
 };
 
-// Asks the body to draw itself. Heading is the direction of travel,
-// except a sea pen stands up (minus half pi) and leans by its sway,
-// and jellies and the dragon face where they are pointing.
+// Asks the body to draw itself. Heading is the direction of travel
+// for sparkle, fish and squid; a sea pen stands up (minus half pi)
+// and leans by its sway; jellies, the dragon and eels face their own
+// angle, so an eel's ribbon keeps its course while its path wiggles.
 Creature.prototype.render = function () {
   let heading;
-  if (this.family === 3) heading = -HALF_PI + this.sway;
-  else if (this.family === 2 || this.family === 4) heading = this.angle;
+  if (this.plan === 3) heading = -HALF_PI + this.sway;
+  else if (this.plan === 2 || this.plan === 4 || this.plan === 6) heading = this.angle;
   else heading = atan2(this.velocity.y, this.velocity.x);
 
   // ambient light from the lure when it is close
@@ -461,13 +547,13 @@ Creature.prototype.render = function () {
 
 ///////////////////////////////////////////////////////////////////
 // Shoal Object
-// All the creatures. Spawns the right number of each family for the
+// All the creatures. Spawns the right number of each species for the
 // canvas size, runs them through the grid, and holds the queue of
 // plankton waiting to light up in a chain reaction.
 ///////////////////////////////////////////////////////////////////
 
-// *** back to front: big slow families draw behind small quick ones
-let drawOrder = [3, 2, 4, 1, 0];
+// *** back to front: big slow plans draw behind small quick ones
+let drawOrder = [3, 2, 5, 6, 4, 1, 0];
 
 function Shoal() {
   this.creatures = [];
@@ -475,33 +561,46 @@ function Shoal() {
   this.grid = null; // the grid from the last run(), for spark()
 }
 
-// How many of a family this canvas should have.
-Shoal.prototype.targetCount = function (family) {
-  let s = familyBehaviour[family];
-  let n = round((width * height) / 100000 * s.perArea);
-  return constrain(n, s.min, s.max);
+// How many of a species this canvas should have.
+Shoal.prototype.targetCount = function (species) {
+  let info = speciesList[species];
+  let r = rarityCount[info.rarity];
+  if (info.plan === 0 && info.rarity === "common") r = planktonCount;
+  let n = round(((width * height) / 100000) * r.perArea / info.size);
+  return constrain(n, r.min, r.max);
 };
 
 // Fills the sea at the start. Each creature begins near its depth,
+// or below the screen if its species is out of hours. Plans are
 // pushed in draw order so the list never needs sorting.
 Shoal.prototype.populate = function () {
   this.creatures = [];
   this.queue = [];
   for (let k = 0; k < drawOrder.length; k++) {
-    let f = drawOrder[k];
-    let n = this.targetCount(f);
-    for (let i = 0; i < n; i++) {
-      let c = new Creature(random(width), 0, f);
-      c.position.y = tide.depthFor(c.pref, c.settings.dayDepth, c.settings.nightDepth) + random(-60, 60);
-      this.creatures.push(c);
+    for (let s = 0; s < speciesList.length; s++) {
+      if (speciesList[s].plan !== drawOrder[k]) continue;
+      let n = this.targetCount(s);
+      for (let i = 0; i < n; i++) {
+        let c = new Creature(random(width), 0, s);
+        c.position.y = c.wantDepth() + random(-60, 60);
+        this.creatures.push(c);
+      }
     }
   }
 };
 
-Shoal.prototype.count = function (family) {
+Shoal.prototype.count = function (species) {
   let n = 0;
   for (let i = 0; i < this.creatures.length; i++) {
-    if (this.creatures[i].family === family) n++;
+    if (this.creatures[i].species === species) n++;
+  }
+  return n;
+};
+
+Shoal.prototype.countPlan = function (plan) {
+  let n = 0;
+  for (let i = 0; i < this.creatures.length; i++) {
+    if (this.creatures[i].plan === plan) n++;
   }
   return n;
 };
@@ -519,7 +618,7 @@ Shoal.prototype.run = function (grid) {
   for (let i = 0; i < this.creatures.length; i++) {
     let c = this.creatures[i];
     // plankton and sea pens ignore their neighbours, so skip the lookup for them
-    let neighbours = c.family === 0 || c.family === 3 ? null : grid.query(c.position);
+    let neighbours = c.plan === 0 || c.plan === 3 ? null : grid.query(c.position);
     c.run(neighbours);
   }
 };
@@ -530,7 +629,8 @@ Shoal.prototype.run = function (grid) {
 // set off the next. When one is struck it lights up to 3 unlit
 // neighbours after a short delay, each of those lights 2, each of
 // those 1, every flash a little weaker. The waiting lights sit in
-// a queue stamped with the frame they should go off.
+// a queue stamped with the frame they should go off. Any plankton
+// species can pass the light to any other.
 ///////////////////////////////////////////////////////////////////
 
 // Queues the nearest unlit plankton around "from". gen is the
@@ -546,7 +646,7 @@ Shoal.prototype.spark = function (from, gen) {
     let bestD = chainDistSq;
     for (let i = 0; i < near.length; i++) {
       let other = near[i];
-      if (other === from || other.family !== 0 || other.cooldown > 0) continue;
+      if (other === from || other.plan !== 0 || other.cooldown > 0) continue;
       let dx = other.position.x - from.position.x;
       let dy = other.position.y - from.position.y;
       let d2 = dx * dx + dy * dy;
