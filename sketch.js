@@ -254,7 +254,7 @@ function drawDebug() {
   text("fps: " + round(frameRate()), x, y);
   text("migration: " + nf(tide.migration, 1, 2) + (tide.forceNight ? " (forced night)" : ""), x, y + 18);
   text("sea: " + sea.state + "  cam " + round(sea.cameraY), x, y + 36);
-  text("creatures: " + shoal.creatures.length + "  species in reach: " + speciesActiveCount(tide.hour), x, y + 54);
+  text("creatures: " + shoal.creatures.length + "  period: " + (shoal.period || periodOf(tide.hour)), x, y + 54);
   text("line speed: " + nf(fline.speed, 1, 2), x, y + 72);
   text("energy: " + nf(sound.energy, 1, 2), x, y + 90);
   pop();
