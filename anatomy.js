@@ -7,11 +7,15 @@
  * Body to draw itself there.
  *
  * A creature is a species (species.js) on a body plan. The plan says
- * how it is built, the species says its colour, size and a few
- * tweaks (speciesLook below) so two species on one plan read as
- * different animals. Every body is grown from one seed with the
- * techniques from class, so no two look the same but they all cost
- * about the same:
+ * how it is built, the species says its colour and size. What kind
+ * of animal it is comes from its name: a word in the name picks a
+ * kind (hatchet, needle, comb, fan, angler, dart, thread...) from
+ * planKinds, a hash of the name narrows every gene range to a window
+ * of its own, and a few named species get a hand-tuned override in
+ * speciesLook. So the 100 species need no 100 rows of tuning, and a
+ * species keeps its look when the table is reordered. Every body is
+ * then grown from one seed with the techniques from class, so no two
+ * look the same but they all cost about the same:
  *   noise (wk 5)       body silhouette, radius around an ellipse wobbled by noise
  *   L-systems (wk 10)  tentacles and fronds, a rule set per plan, angle varies per individual
  *   recursion (wk 9)   branching fins, lure antlers and squid arms, seeded so they are stable
@@ -72,49 +76,91 @@ let planGenes = [
 ];
 
 ///////////////////////////////////////////////////////////////////
-// Species look
-// Small per-species tweaks, same index as speciesList. A range
-// here replaces the plan's range of the same name; the flags turn
-// a detail on in the plan's grow function. Species with no entry
-// are the plan as it comes. Add to the end, never reorder.
+// Kinds and overrides
+// planKinds: per plan, a list of {word, tweak}. Every word found in
+// a species' lower-case name merges its tweak in, in list order. A
+// range here replaces the plan's range of the same name; the flags
+// turn a detail on in the plan's grow function. speciesLook holds
+// the few species that need a specific look, keyed by name, and
+// wins over the kinds. Species that match nothing are the plan as
+// it comes, varied only by their name's gene windows.
 ///////////////////////////////////////////////////////////////////
 
-// *** make two species on one plan look like different animals here
-let speciesLook = [
+// *** give a word in a name a look here
+let planKinds = [
   // plan 0 - sparkle
-  {}, // 0 Sea sparkle
-  { halo: 1.5, size: [2.4, 4] }, // 1 Ember dust: a bigger, warmer glow
-  { shimmer: true, halo: 0.8 }, // 2 Rainbow drift: each one a slightly different tint
+  [
+    { word: "dust", tweak: { halo: 1.5, size: [2.4, 4] } }, // a bigger, warmer glow
+    { word: "ash", tweak: { halo: 1.5, size: [2.4, 4] } },
+    { word: "rainbow", tweak: { shimmer: true, halo: 0.8 } }, // each one a slightly different tint
+    { word: "mote", tweak: { size: [1.6, 2.6], twinkle: [0.1, 0.18] } }, // small and quick
+    { word: "fleck", tweak: { size: [1.6, 2.6], twinkle: [0.1, 0.18] } },
+    { word: "glint", tweak: { size: [1.4, 2.4], twinkle: [0.16, 0.26] } }
+  ],
   // plan 1 - fish
-  {}, // 3 Lanternfish
-  { length: [16, 22], height: [0.6, 0.75], lightEvery: [1, 1], eye: [3, 3.8] }, // 4 Blue hatchet: tall and flat, lights all along
-  { height: [0.24, 0.3], lightEvery: [2, 3], silver: true }, // 5 Dusk sardine: plain silver, few lights
-  { glass: true, lightEvery: [2, 2] }, // 6 Dawn glassfish: see-through
-  { length: [34, 44], height: [0.15, 0.2], lightEvery: [3, 3], snout: true, stripeEvery: [3, 3] }, // 7 Noon needle: long, a beak
-  { height: [0.22, 0.28], lightEvery: [1, 1], rows: 2, bigMouth: true }, // 8 Daylight bristlemouth: two rows of lights, a wide mouth
+  [
+    { word: "hatchet", tweak: { length: [16, 22], height: [0.6, 0.75], lightEvery: [1, 1], eye: [3, 3.8] } }, // tall and flat, lights all along
+    { word: "needle", tweak: { length: [34, 44], height: [0.15, 0.2], lightEvery: [3, 3], snout: true, stripeEvery: [3, 3] } }, // long, a beak
+    { word: "bristlemouth", tweak: { height: [0.22, 0.28], lightEvery: [1, 1], rows: 2, bigMouth: true } }, // two rows of lights, a wide jaw
+    { word: "sardine", tweak: { height: [0.24, 0.3], lightEvery: [2, 3], silver: true } }, // plain silver, few lights
+    { word: "anchovy", tweak: { length: [14, 20], height: [0.26, 0.32], lightEvery: [3, 3], silver: true } }, // tiny
+    { word: "minnow", tweak: { length: [14, 20], height: [0.3, 0.38], eye: [3, 3.6], stripeEvery: [2, 2] } }, // tiny, big-eyed
+    { word: "scad", tweak: { height: [0.34, 0.4], silver: true, tail: [7, 9] } }, // deep silver flank, forked tail
+    { word: "herring", tweak: { height: [0.28, 0.34], lightEvery: [2, 2], silver: true, tail: [7, 9] } },
+    { word: "glass", tweak: { glass: true, lightEvery: [2, 2] } }, // see-through
+    { word: "ink", tweak: { ink: true, lightEvery: [1, 1] } } // only its lights
+  ],
   // plan 2 - jelly
-  {}, // 9 Alarm jelly
-  { dome: [0.42, 0.55], tentacles: [14, 20], length: [18, 34], gens: [1, 1], rimLights: [16, 22], rings: true }, // 10 Moon jelly: flat, a short fringe, four rings
-  { dome: [0.95, 1.2], bell: [36, 48], scallops: [4, 6], tentacles: [2, 2], gens: [2, 2], combs: true }, // 11 Crimson comb: tall, rows of lights down the bell
-  { rays: true, rimLights: [12, 18], tentacles: [6, 10], gens: [2, 2], length: [50, 80] }, // 12 Sun bell: a canal to every scallop
+  [
+    { word: "moon", tweak: { dome: [0.42, 0.55], tentacles: [14, 20], length: [18, 34], gens: [1, 1], rimLights: [16, 22], rings: true } }, // flat, a short fringe, four rings
+    { word: "comb", tweak: { dome: [0.95, 1.2], bell: [36, 48], scallops: [4, 6], tentacles: [2, 2], gens: [2, 2], combs: true } }, // tall, rows of lights down the bell
+    { word: "bell", tweak: { rays: true, rimLights: [12, 18], tentacles: [6, 10], gens: [2, 2], length: [50, 80] } }, // a canal to every scallop
+    { word: "medusa", tweak: { tentacles: [3, 5], gens: [3, 3], length: [90, 130], angle: [14, 24], dome: [0.7, 0.9] } }, // few long frilly tentacles
+    { word: "drifter", tweak: { bell: [56, 64], dome: [0.5, 0.65], tentacles: [10, 14], gens: [1, 1], length: [30, 50], breathe: [0.012, 0.018], rimLights: [6, 8] } }, // huge and slow
+    { word: "lace", tweak: { tentacles: [10, 16], gens: [2, 2], angle: [20, 30], length: [40, 60], bell: [40, 50] } }, // a fine fringe
+    { word: "star", tweak: { stars: true, rimLights: [14, 20] } } // lights scattered over the bell like a constellation
+  ],
   // plan 3 - sea pen
-  {}, // 13 Sea pen
-  { angle: [70, 88], gens: [4, 4], step: [6, 9], weight: [2.5, 3.5] }, // 14 Frost fan: a wide fan
-  { angle: [12, 24], gens: [2, 3], step: [4, 6], stem: [70, 90], weight: [1.2, 1.8], flare: true }, // 15 Ember whip: thin, lights all at once
+  [
+    { word: "fan", tweak: { angle: [70, 88], gens: [4, 4], step: [6, 9], weight: [2.5, 3.5] } }, // a wide fan
+    { word: "whip", tweak: { angle: [12, 24], gens: [2, 3], step: [4, 6], stem: [70, 90], weight: [1.2, 1.8], flare: true } }, // thin, lights all at once
+    { word: "reed", tweak: { angle: [12, 24], gens: [2, 3], step: [4, 6], stem: [70, 90], weight: [1.2, 1.8], flare: true } },
+    { word: "kelp", tweak: { angle: [40, 55], gens: [4, 4], step: [7, 10], weight: [1.6, 2.2] } } // long loose fronds
+  ],
   // plan 4 - dragon
-  {}, // 16 Stoplight dragon
-  { spine: true, fangs: 8, height: [0.12, 0.15], beamStrength: 0.5 }, // 17 Viperfish: lure on a long dorsal spine, more fangs
-  { lamp: true, length: [60, 80], height: [0.3, 0.36], beamStrength: 0, antlerDepth: [1, 1] }, // 18 Pale angler: a lamp on a rod, no beam, round body
+  [
+    { word: "angler", tweak: { lamp: true, length: [60, 80], height: [0.3, 0.36], beamStrength: 0, antlerDepth: [1, 1] } }, // a lamp on a rod, no beam, round body
+    { word: "viper", tweak: { spine: true, fangs: 8, height: [0.12, 0.15], beamStrength: 0.5 } }, // lure on a long dorsal spine, more fangs
+    { word: "lantern-eye", tweak: { eyeLights: true, length: [70, 90], height: [0.2, 0.26], beamStrength: 0.3, antlerDepth: [2, 2] } }, // a big light under each eye
+    { word: "glass", tweak: { glass: true } } // almost clear
+  ],
   // plan 5 - squid
-  { armLights: true, lightEvery: [1, 1] }, // 19 Firefly squid: lights down the arms too
-  { glass: true, lightEvery: [2, 2] }, // 20 Glass squid: see-through, lights only when it panics
-  { web: true, arms: [8, 8], lightEvery: [3, 3], armLen: [12, 16] }, // 21 Vampire squid: a cloak between the arms
+  [
+    { word: "dart", tweak: { mantle: [20, 26], height: [0.3, 0.38], arms: [5, 6], armLen: [6, 9], longArm: [1.2, 1.6], fin: [0.25, 0.3] } }, // small and quick
+    { word: "glass", tweak: { glass: true, lightEvery: [2, 2] } }, // see-through, lights only when it panics
+    { word: "vampire", tweak: { web: true, arms: [8, 8], lightEvery: [3, 3], armLen: [12, 16] } }, // a cloak between the arms
+    { word: "firefly", tweak: { armLights: true, lightEvery: [1, 1] } }, // lights down the arms too
+    { word: "reef", tweak: { fin: [0.4, 0.48], ripple: [0.12, 0.18] } } // big rippling fins
+  ],
   // plan 6 - eel
-  { fin: true }, // 22 Ribbon eel: a fin along the back
-  { thick: [2.5, 4], lightEvery: [3, 4], amp: [4, 7] }, // 23 Silver thread: thin
-  { lightEvery: [2, 2], fin: true, length: [80, 110] }, // 24 Night ribbon: long, more lights
-  { mouth: true, head: [22, 28], thick: [7, 10], lightEvery: [4, 4], amp: [4, 7], freq: [0.05, 0.08] } // 25 Gulper: mostly mouth, slow
+  [
+    { word: "thread", tweak: { thick: [2.5, 4], lightEvery: [3, 4], amp: [4, 7] } }, // thin
+    { word: "ribbon", tweak: { fin: true } }, // a fin along the back
+    { word: "eel", tweak: { thick: [6, 9], length: [80, 110], lightEvery: [3, 3] } }, // the plain long eel
+    { word: "gulper", tweak: { mouth: true, head: [22, 28], thick: [7, 10], lightEvery: [4, 4], amp: [4, 7], freq: [0.05, 0.08] } }, // mostly mouth, slow
+    { word: "abyss", tweak: { mouth: true, head: [22, 28], thick: [7, 10], lightEvery: [4, 4], amp: [4, 7], freq: [0.05, 0.08] } }
+  ]
 ];
+
+// *** the few species that need a specific look, by name. Wins over the kinds.
+let speciesLook = {
+  "Black angler": { lampOnly: true }, // nothing but its lamp
+  "Glass dragon": { glass: true, beamStrength: 0.8, height: [0.16, 0.2] }, // only the beam gives it away
+  "Noon angler": { lampSteady: true }, // keeps its lamp on when you come close
+  "Mist comb": { dome: [0.8, 1], bell: [40, 52] }, // a softer comb than the crimson one
+  "Pearl anchovy": { lightEvery: [2, 2] },
+  "Ink minnow": { ink: true, eye: [2, 2.4] }
+};
 
 let shadowCol = [58, 68, 88]; // *** the unlit grey of a locked guide row
 
@@ -166,7 +212,8 @@ function Body(species, seed) {
   this.look = this.info; // .col is the glow colour
   this.size = this.info.size;
   this.genes = planGenes[this.plan];
-  this.tweak = speciesLook[species] !== undefined ? speciesLook[species] : {};
+  this.tweak = speciesTweak(species); // the kinds its name matches plus any override
+  this.windows = speciesWindows(species); // its own narrow slice of each plan range
   this.seed = seed;
 
   // the collision radius, creature.js and the line read this
@@ -188,7 +235,7 @@ function Body(species, seed) {
   // the same seed always grows the same body. The species goes into
   // the mix so two species on one plan differ even with equal seeds.
   this.mix = seed + species * 1000003;
-  randomSeed(this.mix);
+  randomSeed(this.mix); // after speciesWindows() above, which borrowed random() for a moment
   noiseSeed(this.mix);
   ensureHalo(species);
   this.phase = random(TWO_PI); // so a school's fins are not all in step
@@ -205,10 +252,76 @@ function Body(species, seed) {
   releaseSeeds();
 }
 
-// A gene range: the species' own if it has one, else the plan's.
+// A gene range: the species' override if it has one, else the
+// window its name cut from the plan's range.
 Body.prototype.gene = function (name) {
-  return this.tweak[name] !== undefined ? this.tweak[name] : this.genes[name];
+  if (this.tweak[name] !== undefined) return this.tweak[name];
+  if (this.windows[name] !== undefined) return this.windows[name];
+  return this.genes[name];
 };
+
+///////////////////////////////////////////////////////////////////
+// Species variation
+// Worked out once per species and remembered, so the 600th sparkle
+// costs nothing extra. All of it comes from the name, not the index,
+// so a species keeps its look when species.js is reordered.
+///////////////////////////////////////////////////////////////////
+
+let tweakCache = [];
+let windowCache = [];
+
+// modulo (week 3): a small hash of the name, the species' own seed.
+function nameHash(str) {
+  let h = 7;
+  for (let i = 0; i < str.length; i++) {
+    h = (h * 31 + str.charCodeAt(i)) % 2147483647;
+  }
+  return h;
+}
+
+// Merges the tweaks of every kind word found in the name, then the
+// named override on top.
+function speciesTweak(species) {
+  if (tweakCache[species] !== undefined) return tweakCache[species];
+  let info = speciesList[species];
+  let name = info.name.toLowerCase();
+  let kinds = planKinds[info.plan];
+  let t = {};
+  for (let k = 0; k < kinds.length; k++) {
+    if (name.indexOf(kinds[k].word) < 0) continue;
+    for (let key in kinds[k].tweak) t[key] = kinds[k].tweak[key];
+  }
+  let over = speciesLook[info.name];
+  if (over !== undefined) {
+    for (let key in over) t[key] = over[key];
+  }
+  tweakCache[species] = t;
+  return t;
+}
+
+// Cuts a window out of every numeric plan range for this species:
+// a third of the range wide, centred where the name's seed says.
+// Individuals then vary inside the window, so two species on one
+// plan differ in build (stripe count, light spacing, fin size,
+// tentacle count, antler depth) even before their kind and colour.
+// Uses p5's random() under the name's seed, then hands it back to
+// the caller's seed.
+function speciesWindows(species) {
+  if (windowCache[species] !== undefined) return windowCache[species];
+  let info = speciesList[species];
+  let ranges = planGenes[info.plan];
+  let w = {};
+  randomSeed(nameHash(info.name));
+  for (let key in ranges) {
+    let r = ranges[key];
+    if (!(r instanceof Array)) continue;
+    let span = r[1] - r[0];
+    let centre = r[0] + random() * span;
+    w[key] = [max(r[0], centre - span * 0.17), min(r[1], centre + span * 0.17)]; // *** 0.17 = half the window width
+  }
+  windowCache[species] = w;
+  return w;
+}
 
 ///////////////////////////////////////////////////////////////////
 // Growing
@@ -255,6 +368,7 @@ Body.prototype.growFish = function () {
   this.sprite = this.makeSprite(len + 4 + snout, h + 4);
   let s = this.sprite;
   s.translate(this.ox, this.oy);
+  if (tw.ink) this.bodyCol = mixColour(c, [4, 6, 12], 0.93); // an ink minnow is nearly black
   if (tw.glass) {
     // a glassfish is mostly water: a faint fill and an edge
     s.fill(c[0], c[1], c[2], 28);
@@ -269,7 +383,7 @@ Body.prototype.growFish = function () {
   // modulo (week 3): every stripeEvery-th segment is a shade paler
   let pale = mixColour(c, [220, 235, 240], 0.5);
   let segW = len / n;
-  if (!tw.glass) {
+  if (!tw.glass && !tw.ink) {
     for (let i = 1; i < n - 1; i++) {
       if (i % stripeEvery !== 0) continue;
       s.fill(pale[0], pale[1], pale[2], 45);
@@ -306,10 +420,10 @@ Body.prototype.growFish = function () {
     if (i % lightEvery !== 0) continue;
     let x = -len / 2 + (i + 0.5) * segW;
     let sl = sliceOutline(pts, x);
-    this.lights.push({ x: x, y: sl.bottom - 1.2, r: tw.glass ? 1.6 : 1.3, k: i / n });
+    this.lights.push({ x: x, y: sl.bottom - 1.2, r: tw.glass || tw.ink ? 1.6 : 1.3, k: i / n });
     if (tw.rows === 2) this.lights.push({ x: x, y: (sl.top + sl.bottom) * 0.5 + h * 0.08, r: 1, k: i / n });
   }
-  this.bakeLights(s, tw.glass ? 140 : 90);
+  this.bakeLights(s, tw.glass || tw.ink ? 140 : 90);
   this.box = { x0: -this.ox - this.tail, y0: -this.oy, x1: len + 4 + snout - this.ox, y1: h + 4 - this.oy };
 };
 
@@ -395,6 +509,13 @@ Body.prototype.growJelly = function () {
         let v = j / 6;
         this.lights.push({ x: cos(a) * bw * 0.5 * v, y: sin(a) * bh * v, r: 1.3, k: v });
       }
+    }
+  } else if (tw.stars) {
+    // a constellation: lights scattered over the dome, seeded
+    for (let i = 0; i < nL; i++) {
+      let a = PI + random(0.1, 0.9) * PI;
+      let v = random(0.35, 0.95);
+      this.lights.push({ x: cos(a) * bw * 0.5 * v, y: sin(a) * bh * v, r: i % 3 === 0 ? 1.8 : 1.1, k: i / nL });
     }
   } else {
     // the ring of lights round the rim, every other one bigger (modulo, week 3)
@@ -510,18 +631,25 @@ Body.prototype.growDragon = function () {
   this.sprite = this.makeSprite(len + 12, sh);
   let s = this.sprite;
   s.translate(this.ox, this.oy);
-  s.fill(this.bodyCol[0], this.bodyCol[1], this.bodyCol[2]);
-  s.stroke(c[0], c[1], c[2], 70);
+  let hidden = tw.glass || tw.lampOnly; // a glass dragon is nearly clear, a black angler is only its lamp
+  if (hidden) {
+    s.fill(c[0], c[1], c[2], tw.lampOnly ? 6 : 22);
+    s.stroke(c[0], c[1], c[2], tw.lampOnly ? 18 : 90);
+  } else {
+    s.fill(this.bodyCol[0], this.bodyCol[1], this.bodyCol[2]);
+    s.stroke(c[0], c[1], c[2], 70);
+  }
   s.strokeWeight(0.8);
   fillPolygon(s, pts);
   s.noStroke();
+  if (tw.lampOnly) this.bodyCol = [this.bodyCol[0], this.bodyCol[1], this.bodyCol[2], 30]; // the tail fades too
 
   // modulo (week 3): a faint stripe on every other segment, and a
   // photophore on every lightEvery-th one along the belly
   let segW = len / n;
   for (let i = 1; i < n - 1; i++) {
     let x0 = -len / 2 + i * segW;
-    if (i % 2 === 0) {
+    if (i % 2 === 0 && !hidden) {
       s.fill(c[0], c[1], c[2], 18);
       fillPolygon(s, outlineStrip(pts, x0, x0 + segW));
     }
@@ -535,10 +663,13 @@ Body.prototype.growDragon = function () {
   // photophore just under the eye
   let eyeX = len * 0.36;
   let eyeY = -h * 0.1;
-  s.fill(225, 225, 235);
-  s.circle(eyeX, eyeY, h * 0.34);
-  s.fill(4, 4, 10);
-  s.circle(eyeX + h * 0.04, eyeY, h * 0.2);
+  if (!tw.lampOnly) {
+    s.fill(225, 225, 235);
+    s.circle(eyeX, eyeY, h * 0.34);
+    s.fill(4, 4, 10);
+    s.circle(eyeX + h * 0.04, eyeY, h * 0.2);
+  }
+  if (tw.eyeLights) this.lights.push({ x: eyeX - h * 0.05, y: eyeY + h * 0.3, r: 2.4, k: 1, lure: false, eye: true });
   s.stroke(c[0], c[1], c[2], 110);
   s.strokeWeight(0.8);
   s.line(len / 2 - 1, h * 0.08, len * 0.22, h * 0.3);
@@ -1080,7 +1211,7 @@ Body.prototype.drawTail = function (t, flash, b) {
   push();
   translate(-this.len / 2 + 1, 0);
   rotate(k);
-  fill(b[0], b[1], b[2], 220);
+  fill(b[0], b[1], b[2], b[3] !== undefined ? b[3] : 220);
   if (this.plan === 4) quad(0, 0, -tl, -tl * 0.5, -tl * 0.7, 0, -tl, tl * 0.5);
   else triangle(0, 0, -tl, -tl * 0.55, -tl, tl * 0.55);
   pop();
@@ -1244,7 +1375,8 @@ Body.prototype.drawDragonLights = function (c, flash, lit, t) {
   for (let i = 0; i < L.length; i++) {
     let l = L[i];
     let a = b;
-    if (l.lamp) a = 0.7 * (1 - lit) + flash;
+    if (l.lamp) a = this.tweak.lampSteady ? 0.8 + 0.2 * flash : 0.7 * (1 - lit) + flash;
+    else if (l.eye) a = 0.6 * (0.5 + 0.5 * sin(t * 0.05 + this.phase)) * (1 - lit) + flash; // blinks, and switches off when you come close
     else if (l.lure) a = 0.35 + 0.35 * sin(t * 0.09 + this.phase + l.x) + 0.3 * flash;
     fill(c[0], c[1], c[2], 255 * min(1, a));
     circle(l.x, l.y, l.r * (1.4 + 1.2 * flash));

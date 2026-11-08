@@ -1,24 +1,29 @@
 /* DM3008 Generative Art, Final Project 2026
  * The Abyss Listens
- * dev/anatomy-test/sketch.js - every species, three seeds each
+ * dev/anatomy-test/sketch.js - every species, a page per period
  *
  * Stream A's test bench. Loads only p5, species.js and anatomy.js.
- * Each species gets a cell with three seeds animating and its name
- * under them. Every body is struck on a timer so the flash fades
+ * One page per period of the day, 25 species each, two seeds per
+ * species with the name under them. At startup it grows all 100
+ * species once and draws each the three ways, and logs the result
+ * to the console. Every body is struck on a timer so the flash fades
  * like the real thing, and the lure's light follows the mouse.
  *
- *   r    reroll all seeds
+ *   t    next period (morning, afternoon, evening, night)
+ *   r    reroll the seeds
  *   s    stress swarm behind the grid: 600 plankton, 150 fish and
- *        40 others, the main sketch's full population, for the fps
- *   1-7  close-up: one plan's species at 2.5x, 0 back to the grid
- *   i    show the guide portraits (lit, and the dark silhouette) in each cell
+ *        40 others of the current period, for the fps
+ *   1-7  close-up: one plan's species of this period at 2.5x, 0 back
+ *   i    show the guide portraits (lit, and the dark silhouette)
  *   p    pixel density 1 or 2, to see the retina cost on a plain screen
  */
 
-let seedsPer = 3;
-let perRow = 4; // *** species cells per row
-let bodies = []; // bodies[species][seed]
-let flashes = [];
+let seedsPer = 2;
+let perRow = 5; // *** species cells per row
+let period = 0; // index into dayPeriods
+let page = []; // species indices on this page
+let bodies = {}; // bodies[species] = [Body, Body]
+let flashes = {};
 let showIcons = true;
 let stress = false;
 let swarm = [];
@@ -27,21 +32,41 @@ let zoom = 2.5; // *** close-up scale
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
+  growEverything();
   reroll();
 }
 
-function reroll() {
-  bodies = [];
-  flashes = [];
+// Grows every species once with seed 1 (what the guide does) and
+// draws it the three ways, so a broken species shows up in the console.
+function growEverything() {
+  let ok = 0;
+  let t0 = millis();
   for (let sp = 0; sp < speciesList.length; sp++) {
-    let set = [];
-    let fl = [];
-    for (let i = 0; i < seedsPer; i++) {
-      set.push(new Body(sp, random(100000)));
-      fl.push(0);
+    try {
+      let b = new Body(sp, 1);
+      b.render(-500, -500, 0.3, 0.5, 0.5);
+      b.renderIcon(-500, -500, 32);
+      b.renderSilhouette(-500, -500, 32);
+      ok++;
+    } catch (e) {
+      console.error("species " + sp + " (" + speciesList[sp].name + ") failed: " + e.message);
     }
-    bodies.push(set);
-    flashes.push(fl);
+  }
+  console.log("anatomy bench: " + ok + " of " + speciesList.length + " species grew and drew in " + round(millis() - t0) + " ms");
+}
+
+function reroll() {
+  page = speciesOfPeriod(dayPeriods[period]);
+  bodies = {};
+  flashes = {};
+  for (let n = 0; n < page.length; n++) {
+    let sp = page[n];
+    bodies[sp] = [];
+    flashes[sp] = [];
+    for (let i = 0; i < seedsPer; i++) {
+      bodies[sp].push(new Body(sp, random(100000)));
+      flashes[sp].push(0);
+    }
   }
 }
 
@@ -53,14 +78,19 @@ function headingFor(plan, i) {
   return sin(frameCount * 0.01 + i) * 2.4; // swings past vertical so the flip shows
 }
 
-// The swarm is the main sketch's full population, drifting in
-// straight lines with wrap, so only the drawing cost is measured.
+// The swarm is the main sketch's full population for this period,
+// drifting in straight lines with wrap, so only the drawing cost is measured.
 function makeSwarm() {
   swarm = [];
-  let plankton = [0, 1, 2];
-  let fish = [3, 4, 5, 6, 7, 8];
+  let plankton = [];
+  let fish = [];
   let others = [];
-  for (let sp = 9; sp < speciesList.length; sp++) others.push(sp);
+  for (let n = 0; n < page.length; n++) {
+    let plan = speciesList[page[n]].plan;
+    if (plan === 0) plankton.push(page[n]);
+    else if (plan === 1) fish.push(page[n]);
+    else others.push(page[n]);
+  }
   addSwarm(plankton, 600);
   addSwarm(fish, 150);
   addSwarm(others, 40);
@@ -90,16 +120,15 @@ function draw() {
     return;
   }
 
-  let rows = ceil(speciesList.length / perRow);
+  let rows = ceil(page.length / perRow);
   let cellW = width / perRow;
   let cellH = (height - 30) / rows;
   let k = min(1, cellH / 150); // shrink the cells on a small window
-  for (let sp = 0; sp < speciesList.length; sp++) {
+  for (let n = 0; n < page.length; n++) {
+    let sp = page[n];
     let info = speciesList[sp];
-    let col = sp % perRow;
-    let rowIndex = floor(sp / perRow);
-    let cx0 = col * cellW;
-    let cy = 30 + (rowIndex + 0.5) * cellH;
+    let cx0 = (n % perRow) * cellW;
+    let cy = 30 + (floor(n / perRow) + 0.5) * cellH;
     for (let i = 0; i < seedsPer; i++) {
       let cx = cx0 + (i + 0.5) * (cellW / seedsPer);
       strikeTimer(sp, i);
@@ -120,7 +149,7 @@ function draw() {
     textAlign(CENTER, BOTTOM);
     text(info.name + "  (" + bodyPlans[info.plan] + " x" + info.size + ")", cx0 + cellW / 2, cy + cellH / 2 - 3);
   }
-  readout("fps " + round(frameRate()) + "   r reroll   s stress swarm " + (stress ? "on (" + swarm.length + " bodies)" : "off") + "   1-7 close-up   i portraits   p density " + pixelDensity());
+  readout("fps " + round(frameRate()) + "   " + dayPeriods[period] + " (t next)   r reroll   s stress swarm " + (stress ? "on (" + swarm.length + " bodies)" : "off") + "   1-7 close-up   i portraits   p density " + pixelDensity());
 }
 
 // a strike every 150 frames, staggered so the grid never flashes all at once
@@ -129,11 +158,11 @@ function strikeTimer(sp, i) {
   flashes[sp][i] *= 0.94;
 }
 
-// One plan's species across the screen at 2.5x, to check the details.
+// One plan's species of this period across the screen at 2.5x.
 function drawCloseup() {
   let list = [];
-  for (let sp = 0; sp < speciesList.length; sp++) {
-    if (speciesList[sp].plan === closeup) list.push(sp);
+  for (let n = 0; n < page.length; n++) {
+    if (speciesList[page[n]].plan === closeup) list.push(page[n]);
   }
   let cellW = width / list.length;
   let cellH = (height - 30) / seedsPer;
@@ -156,7 +185,7 @@ function drawCloseup() {
     textAlign(CENTER, BOTTOM);
     text(speciesList[sp].name, (n + 0.5) * cellW, height - 8);
   }
-  readout("fps " + round(frameRate()) + "   " + bodyPlans[closeup] + " at " + zoom + "x   0 back to the grid");
+  readout("fps " + round(frameRate()) + "   " + dayPeriods[period] + " " + bodyPlans[closeup] + " at " + zoom + "x   0 back to the grid");
 }
 
 function drawSwarm() {
@@ -185,6 +214,12 @@ function readout(msg) {
 }
 
 function keyPressed() {
+  if (key === "t") {
+    period = (period + 1) % dayPeriods.length; // modulo, round the day
+    swarm = [];
+    stress = false;
+    reroll();
+  }
   if (key === "r") reroll();
   if (key === "i") showIcons = !showIcons;
   if (key === "s") {
